@@ -12,7 +12,8 @@ quantiphy = "^2.19"
 hvplot = "^0.9.2"
 
 
-
+[tool.poetry.group.dev]
+optional = true
 
 [tool.poetry.group.dev.dependencies]
 #ipykernel = "^6.29.4"
