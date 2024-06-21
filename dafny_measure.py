@@ -1,7 +1,7 @@
 #! python3
 """
-Runs dafny's measure-complexity with the given args,
-stores the log file with the args in the filename for easier bookkeeping
+Ease bookkeeping of dafny's measure-complexity runs 
+by storing the log file with the args in the filename
 """
 
 import argparse
