@@ -14,17 +14,17 @@ def cleanDisplayName(dn:str) -> str:
     return new.strip()
 
 class Details:
-    def __init__(self):
+    def __init__(self) -> None:
         self.RC: list[int]= []
         self.OoR = []
         self.failures = []
     RC: list[int]
     RC_max: int     #useful for the table
     RC_min: int
-    line: int = None
-    col: int = None
-    filename: str = None
-    description: str = None
+    line: int
+    col: int
+    filename: str
+    description: str
     OoR: list[int]  #OutOfResources
     failures: list[int]
     is_AB: bool
@@ -54,8 +54,11 @@ def check_locations_ABs(locations) -> None:
                 continue
             assert ABs_first == ABs, f"{loc} has changing ABs. Until now it was {ABs_first}. But for rseed {r}, it's {ABs}"
 
-def readCSV(fullpath) -> int: #reads 1 file, returns number of rows read
+def readCSV(fullpath) -> resultsType:
     """Reads the CSV file into the global usages map"""
+    raise NotImplementedError("CSV reading needs fixing")
+    # needs to be changed to return a resultsType like readJSON does
+    # only reason to use CSV is for Dafny <4.5
     rows = 0
     global results
     with open(fullpath) as csvfile:
@@ -153,7 +156,7 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
 
                 # There's multiple ABs. Each AB contains a single assertion
                 display_name_AB: str = display_name + f" AB{vcr["vcNum"]}"
-                det: Details = results.get(display_name_AB, Details())
+                det = results.get(display_name_AB, Details())
                 det.is_AB = True
 
                 # The first vcr is always empty
@@ -237,7 +240,7 @@ def readLogs(paths, read_pickle = False, write_pickle = False) -> resultsType:
                 if ext == ".json":
                     results_read = readJSON(p)
                 elif ext == ".csv":
-                    results_read = readCSV(p)
+                    results_read = readCSV(fullpath)
                 else:
                     sys.exit(f"Unknown file format: {p}")
                 mergeResults(results, results_read)
