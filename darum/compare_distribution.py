@@ -15,6 +15,10 @@ from darum.log_readers import Details, readLogs
 from quantiphy import Quantity
 from pathlib import Path
 
+from bokeh.models import NumeralTickFormatter, HoverTool
+from bokeh.util.compiler import TypeScript
+
+
 def smag(i) -> str:
     return f"{Quantity(i):.3}"
 
@@ -25,19 +29,19 @@ def dn_is_excluded(dn, exclude_list):
     return False
 
 def row_from_Details(v: Details):
-    minRC_entry = min(v.RC, default=inf)
+    minRC_entry = min(v.RC, default=0)
 #    minRC = min(minRC, minRC_entry)
-    maxRC_entry = max(v.RC, default=-inf)
+    maxRC_entry = max(v.RC, default=0)
 #    maxRC = max(maxRC, maxRC_entry)
-    minOoR_entry = min(v.OoR, default=inf)
+    # minOoR_entry = min(v.OoR, default=0)
 #    minOoR = min(minOoR,minOoR_entry)
-    minFailures_entry = min(v.failures, default=inf)
+    # minFailures_entry = min(v.failures, default=0)
 #    minFailures = min(minFailures,minFailures_entry)
 
     #comment = ""
 
     # Calculate the % span between max and min
-    span = (maxRC_entry-minRC_entry)/minRC_entry
+    span = (maxRC_entry-minRC_entry)/minRC_entry if minRC_entry != 0 else 0
     # info = f"{k:40} {len(v.RC):>10} {smag(minRC_entry):>8}    {smag(maxRC_entry):>6} {span:>8.2%}"
     # log.debug(info)
     return {
@@ -52,10 +56,39 @@ def row_from_Details(v: Details):
     }
 
 
+class NumericalTickFormatterWithLimit(NumeralTickFormatter):
+    margin = 0
+
+    def __init__(self, margin:int, **kwargs):
+        super().__init__(**kwargs)
+        NumericalTickFormatterWithLimit.margin = margin
+        NumericalTickFormatterWithLimit.__implementation__ = TypeScript(
+"""
+import {NumeralTickFormatter} from "models/formatters/numeral_tick_formatter"
+
+export class NumericalTickFormatterWithLimit extends NumeralTickFormatter {
+    static __name__ = '""" + __name__ + """.NumericalTickFormatterWithLimit'
+    FAIL_MIN=""" + str(int(margin)) + """
+
+    doFormat(ticks: number[], _opts: {loc: number}): string[] {
+        const formatted = []
+        const ticks2 = super.doFormat(ticks, _opts)
+        for (let i = 0; i < ticks.length; i++) {
+        if (ticks[i] < this.FAIL_MIN) {
+            formatted.push(ticks2[i])
+        } else {
+            formatted.push('FAILED')
+        }
+        }
+        return formatted
+    }
+}
+""")
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('path_normal')#, nargs='+')
-    parser.add_argument('-i','--path_IA')#, nargs='+')
+    parser.add_argument('path_normal', nargs='+')
+    parser.add_argument('-i','--path_IA', nargs='+')
     parser.add_argument("-v", "--verbose", action="count", default=0)
     #parser.add_argument("-p", "--recreate-pickle", default=, action="store_true")
     # parser.add_argument("-n", "--nbins", default=50)
@@ -73,10 +106,12 @@ def main() -> None:
     numeric_level = log.WARNING - args.verbose * 10
     log.basicConfig(level=numeric_level,format='%(asctime)s-%(levelname)s:%(message)s',datefmt='%H:%M:%S')
 
-    product = Path(args.path_normal).name + "-" + Path(args.path_IA).name
+    product = Path(args.path_normal[0]).name
 
-    results_normal = readLogs([args.path_normal])#, args.recreate_pickle)
-    results_IA = readLogs([args.path_IA])#, args.recreate_pickle)
+    log.debug(f"logs_normal={args.path_normal}")
+    results_normal = readLogs(args.path_normal)#, args.recreate_pickle)
+    log.debug(f"logs_IA={args.path_IA}")
+    results_IA = readLogs(args.path_IA)#, args.recreate_pickle)
 
     # PROCESS THE DATA
 
@@ -100,9 +135,9 @@ def main() -> None:
     # df_IA = df_IA.sort_values(["failures","OoRs","minRC * span"], ascending=False,kind='stable')
     # df_IA.reset_index(inplace=True)
     # df_IA['Element_ordered'] = [f"{i} {s}" for i,s in zip(df_IA.index,df_IA["Element"])]
-    cs = [e for e in df_IA.columns.values if e != "Element"]
-    cs_IA = [c + " IA" for c in cs]
-    renamer = {c:c_IA for c, c_IA in zip(cs, cs_IA)}
+    colnames = [e for e in df_IA.columns.values if e != "Element"]
+    colnames_IA = [c + " IA" for c in colnames]
+    renamer = {c:c_IA for c, c_IA in zip(colnames, colnames_IA)}
     df_IA.rename(columns=renamer, inplace=True)
 
     df = pd.DataFrame( columns=["minRC", "maxRC", "span", "successes", "OoRs","failures","is_AB"])
@@ -140,8 +175,6 @@ def main() -> None:
     # from hvplot import hvPlot
     from holoviews import opts
     # from bokeh.models.tickers import FixedTicker, CompositeTicker, BasicTicker
-    from bokeh.models import NumeralTickFormatter, HoverTool
-    from bokeh.util.compiler import TypeScript
 
     hv.extension('bokeh')
     renderer = hv.renderer('bokeh')
@@ -297,6 +330,7 @@ def main() -> None:
             "span IA":"RC span% IA"
         },inplace=True)
 
+    print(df)
     table = hv.Table(df).opts(height=310,width=800)
 
     # table = hv.Div("<h2>Normal mode:</h2>").opts(height=50) + table
@@ -305,29 +339,9 @@ def main() -> None:
     plot = scatter * spikes * vspan + table
     plot.cols(1)
 
-    class NumericalTickFormatterWithLimit(NumeralTickFormatter):
-        __implementation__ = TypeScript("""
-    import {NumeralTickFormatter} from "models/formatters/numeral_tick_formatter"
 
-    export class NumericalTickFormatterWithLimit extends NumeralTickFormatter {
-    FAIL_MIN=""" + str(int(RCmargin)) + """
 
-    doFormat(ticks: number[], _opts: {loc: number}): string[] {
-        const formatted = []
-        const ticks2 = super.doFormat(ticks, _opts)
-        for (let i = 0; i < ticks.length; i++) {
-        if (ticks[i] < this.FAIL_MIN) {
-            formatted.push(ticks2[i])
-        } else {
-            formatted.push('FAILED')
-        }
-        }
-        return formatted
-    }
-    }
-    """)
-
-    mf = NumericalTickFormatterWithLimit(format="0.0a")
+    mf = NumericalTickFormatterWithLimit(RCmargin, format="0.0a")
 
     plot.opts(
     #     #opts.Histogram(responsive=True, height=500, width=1000),
@@ -376,4 +390,6 @@ def main() -> None:
     # os.system("open lplot.html")
 
 
-
+# for easier debugging
+if __name__ == "__main__":
+    main()
