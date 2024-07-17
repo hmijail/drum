@@ -57,7 +57,7 @@ export class NumericalTickFormatterWithLimit extends NumeralTickFormatter {
             if (ticks[i] < this.FAIL_MIN) {
                 formatted.push(ticks2[i])
             } else {
-                formatted.push('FAILED')
+                formatted.push('FAIL/OoR')
             }
         }
         return formatted
@@ -77,14 +77,14 @@ def main() -> int:
     #parser.add_argument("-o", "--only", action='append', default=[], help="Only plot DisplayNames with these substrings")
     parser.add_argument("-t", "--top", type=int, default=5, help="Plot only the top N most interesting. Default: %(default)s")
     parser.add_argument("-s", "--stop", default=False, action='store_true', help="Process the data but stop before plotting.")
-    # parser.add_argument("-a", "--IAmode", default=False, action='store_true', help="Whether Isolated Assertions mode was used during verification. Used only to check consistency of results.")
+    parser.add_argument("-a", "--force-IAmode", default=False, action='store_true', help="Whether to focus on Assertion Batches instead of functions/methods/etc. Best for Isolated Assertions mode. Default: autodetect")
     parser.add_argument("-l", "--limitRC", type=Quantity, default=None, help="The RC limit that was used during verification. Used only to check consistency of results. Default: %(default)s")
     parser.add_argument("-b", "--bspan", type=int, default=0, help="A function's histogram will only be plotted if it spans => BSPAN bins. Default: %(default)s")
 
     args = parser.parse_args()
 
     numeric_level = log.WARNING - args.verbose * 10
-    log.basicConfig(level=numeric_level,format='%(asctime)s-%(levelname)s:%(message)s',datefmt='%H:%M:%S')
+    log.basicConfig(level=numeric_level,format='%(levelname)s: %(message)s')
 
     if not args.paths:
         # Get the path of the latest file in the current directory
@@ -93,7 +93,7 @@ def main() -> int:
             log.info("Plotting latest file in current dir: {os.path.basename(latest_file)}")
             args.paths.append(latest_file)
         else:
-            sys.exit("Error: No file given, and latest file is not JSON.")
+            sys.exit("Error: No file given, and latest file in dir is not JSON.")
 
     results = readLogs(args.paths, args.recreate_pickle)
 
@@ -110,35 +110,53 @@ def main() -> int:
     df = pd.DataFrame( columns=["minRC", "maxRC", "span", "successes", "OoRs","failures","AB","loc","comment","displayName","postOoR", "postFailure"])
     df.index.name="element"
 
-    ABs_present = False
+    IAmode = None
+    IAmode_detected = True
     for k,v in results.items():
-        if v.AB>0:
-            ABs_present = True
+        if v.AB==1 and not v.loc=='-':
+            IAmode_detected = False
+            log.debug(f"IAmode=False because of {k}:{v.loc=}")
             break
 
+    if  args.force_IAmode:
+        if not IAmode_detected:
+            log.info(f"Setting IAmode to {args.force_IAmode}, even though detected={IAmode_detected}")
+        IAmode = args.force_IAmode
+    else:
+        IAmode= IAmode_detected
+
+    filenames : set[str]= set()
+    for k,v in results.items():
+        f = v.filename
+        if len(f)>1:
+            filenames.add(f)
+    filenames_only_one = len(filenames)==1
+
+    # Digest each entry's list of RCs into a dataframe row of the entry's stats
     for k,v in results.items():
         # for ig in args.exclude:
         #     if ig in k:
         #         log.debug(f"Excluding {k}")
         #         continue
         minRC_entry = min(v.RC, default=inf)
-        minRC = min(minRC, minRC_entry)
         maxRC_entry = max(v.RC, default=-inf)
-        maxRC = max(maxRC, maxRC_entry)
         minOoR_entry = min(v.OoR, default=inf)
         minOoR = min(minOoR,minOoR_entry)
         minFailures_entry = min(v.failures, default=inf)
         minFailures = min(minFailures,minFailures_entry)
         maxFailures_entry = max(v.failures, default=-inf)
         maxFailures = max(maxFailures,maxFailures_entry)
-        if v.AB>0:
-            # maxRC and minRC include non-ABs, so they aren't useful in IA mode
+        if v.AB==0:
+            minRC = min(minRC, minRC_entry)
+            maxRC = max(maxRC, maxRC_entry)
+        else:
             minRC_ABs = min(minRC_ABs, minRC_entry)
             maxRC_ABs = max(maxRC_ABs, maxRC_entry)
+    
         comment = ""
 
         # if a limit was given, we can do some fine grained checks
-        if args.limitRC is not None and (v.AB>0 or (not ABs_present and v.AB==0)):
+        if args.limitRC is not None and v.AB>0:
             # any RC > limitRC should be in the OoRs, not in the RCs
             # but beware, in IAmode, the vRs' RC is the sum of its ABs, so they can legitimately have RCs > limitRC
             if maxRC_entry > args.limitRC:
@@ -147,9 +165,8 @@ def main() -> int:
                 log.warning(f"MinOoR for {k} is {min(v.OoR)}, should be > {args.limitRC=}")
         # Calculate the % span between max and min
         span = (maxRC_entry-minRC_entry)/minRC_entry if minRC_entry != 0 else 0
-        info = f"{k:40} {len(v.RC):>10} {smag(minRC_entry):>8}    {smag(maxRC_entry):>6} {span:>8.2%}"
-        log.debug(info)
-        lincol = "" if v.line == 0 else f":{v.line}:{v.col}"
+        # info = f"{k:40} {len(v.RC):>10} {smag(minRC_entry):>8}    {smag(maxRC_entry):>6} {span:>8.2%}"
+        # log.debug(info)
         df.loc[k] = {
             "successes": len(v.RC),
             "minRC" : minRC_entry,
@@ -158,86 +175,83 @@ def main() -> int:
             "OoRs" : len(v.OoR),
             "failures" : len(v.failures),
             "AB" : v.AB,
-            "loc"   : f"{v.filename}{lincol}",
+            "loc"   : v.loc if filenames_only_one else f"{v.filename}:{v.loc}",
             "comment": comment,
-            "displayName": v.displayName
+            "displayName": v.displayName,
+            "postOoR": 0,
+            "postFailure": 0
         }
 
     minFailures = Quantity(minFailures)
     minOoR = Quantity(minOoR)
     # assert maxRC < minFail
 
-    df["weighted_span"] = df["span"] * df["minRC"]
+    df["weighted_span"] = pd.concat([df[df["AB"]>0].span * df[df["AB"]>0].minRC, df[df["AB"]==0].span])
 
-    if ABs_present:
-        # if an AB isn't successful, tag the following ones in its displayName as poisoned
-        df.sort_values(["displayName","AB"], ascending=False,kind='stable', inplace=True)
-        DNs = set(df["displayName"].values)
+    # if an AB isn't successful, tag the following ones in its displayName as poisoned
+    # df.sort_values(["displayName","AB"], ascending=False,kind='stable', inplace=True)
+    DNs = set(df["displayName"].values)
+    for d in DNs:
+        df_OoRABs = df[(df.displayName==d) & (df.AB>0) & (df.OoRs>0)]
+        if not df_OoRABs.empty:
+            for a in df_OoRABs.AB:
+                df.loc[(df.displayName==d) & (df.AB>a),"postOoR"] += 1
 
-        # poisonDN = None
-        for d in DNs:
-            df_OoRABs = df[(df.displayName==d) & (df.AB>0) & (df.OoRs>0)]
-            if not df_OoRABs.empty:
-                for a in df_OoRABs.AB:
-                    df.loc[(df.displayName==d) & (df.AB>a),"postOoR"] += 1
+        df_failedABs = df[(df.displayName==d) & (df.AB>0) & (df.failures>0)]
+        if not df_failedABs.empty:
+            for a in df_failedABs.AB:
+                df.loc[(df.displayName==d) & (df.AB>a),"postFailure"] += 1
+        # if a vR only has AB1, drop AB0 and remove the "AB1" suffix
+        if df[(df.displayName==d) & (df.AB>1)].empty:
+            # df = df.drop(df[(df.displayName==d) & (df.AB==0)].index)
+            r= df[(df.displayName==d) & (df.AB==1)].to_dict('records')
+            assert len(r)==1
+            df = df.drop(df[(df.displayName==d) & (df.AB<=1)].index)
+            df.loc[d] = r[0]
 
-            df_failedABs = df[(df.displayName==d) & (df.AB>0) & (df.failures>0)]
-            if not df_failedABs.empty:
-                for a in df_failedABs.AB:
-                    df.loc[(df.displayName==d) & (df.AB>a),"postFailure"] += 1
+            # d = df[(df.displayName==d) & (df.AB==1)].index
+            # df.loc[d,"element"] = df.loc[d,"displayName"]
+    #TODO Think of a weighting formula to sort while taking into account the post-OoR/Fail
+    # First: failures and OoRs not poisoned
+    # then, by span of ABs, or weighted_span of vRs, not poisoned
+    # at some point, OoR-poisoned results with big span should come in before the very small spans. div2?
+    # failure-poisoned should come last, even if they are fails themselves (is there any such case? maybe the poisoning assume-false causes everything to pass afterwards!)
+    # document all of this in a readme! including emojis in comments?
+    df.sort_values(["weighted_span"], ascending=False, kind='stable', inplace=True)
+    df.sort_values(["failures","OoRs"], ascending=False, kind='stable', inplace=True)
+    df.sort_values(["postFailure","postOoR"], ascending=True, kind='stable', inplace=True)
 
-            # for a in sorted(df[df["displayName"]==d]["AB"].values):
-            #     if a == 0:
-            #         continue
-            #     row_df = df[(df["displayName"]==d) & (df["AB"]==a)]
-            #     if row_df.at["failures"]>0 or row_df.at["OoRs"]>0:
-            #         df[df["displayName"]==d & df["AB"]>a]["comment"] += "❓"
-
-            # if df.loc[i,"AB"]==0:
-            #     poisonDN = None
-            # else:
-            #     if df.loc[i,"displayName"] == poisonDN:
-            #         df.loc[i,"comment"] += "❓"
-            #     else:
-            #         if df.loc[i,"failures"]>0 or df.loc[i,"OoRs"]>0:
-            #             curAB = df.loc[i,"AB"]
-            #             poisonDN = df.loc[i,"displayName"]
-
-    df.sort_values(["failures","OoRs","weighted_span"], ascending=False,kind='stable', inplace=True)#.drop("weighted_span")
-
-    # IA logs contain both vrs and vcrs. Separate them.
-    df_ABs = df[df["AB"]>0]
-    if df_ABs.empty:
-        df_vrs = None
-        df = df
-    else:
+    #TODO if we separate them, what sense did it make to sort them together?
+    # In IA mode, the focus in on the ABs. Separate them.
+    if IAmode:
         df_vrs = df[df["AB"] == 0]
-        df = df_ABs
+        df = df[df["AB"]>0]
+        log.debug(f"vRs table:{df_vrs.shape}, ABs table:{df.shape}")
+    else:
+        df_vrs = None
 
     df.reset_index(inplace=True)
     df['element_ordered'] = [f"{i} {s}" for i,s in zip(df.index,df["element"])]
 
     if args.limitRC is None:
         if minOoR < inf:
-            mRC = minRC_ABs if ABs_present else minRC
             if minFailures < inf:
-                mRC = max(minFailures,mRC)
+                mRC = max(minFailures,minRC_ABs)
             log.warning(f"Logs contain OoR results, but no limitRC was given. Minimum OoR RC found = {minOoR}.")
-            assert minOoR > mRC, f"LimitRC must have been <= {minOoR}, yet some results are higher: minRC={mRC}, {minFailures=}"
+            assert minOoR > minRC_ABs, f"LimitRC must have been <= {minOoR}, yet some results are higher: minRC={mRC}, {minFailures=}"
             OoRstr = f"OoR > {minOoR}"
         else:
             OoRstr = ""
     else:
         # we did some checking at the single-result-level while digesting the logs; here we can do global checks
-        m = maxRC_ABs if ABs_present else maxRC
-        if args.limitRC < m:
-            log.warn(f"{args.limitRC=}, yet some results are higher: {m}")
+        if args.limitRC < maxRC_ABs:
+            log.warn(f"{args.limitRC=}, yet some results are higher: {maxRC_ABs}")
         if  maxFailures > args.limitRC:
             log.info(f"{maxFailures=} is greater than {args.limitRC=}")
         assert args.limitRC < minOoR, f"{args.limitRC=}, yet some OoR results are lower: {minOoR=}"
         if minOoR < inf and  minOoR > args.limitRC * 1.5:
-            # was a purposefully low limit given just to silence the warnings?
-            log.warning(f"The given LimitRC is quite smaller than the min OoR found = {minOoR}. Might be incorrect.")
+            # There are OoRs, but they are suspiciously higher than the given limit.
+            log.warning(f"The given {args.limitRC=} is quite smaller than the min OoR found = {minOoR}. Might be incorrect.")
         OoRstr = f"OoR > {args.limitRC}"
 
     failstr: str = OoRstr #"FAILED"# + fstr
@@ -339,11 +353,12 @@ def main() -> int:
 
 
     hv.extension('bokeh')
-    renderer = hv.renderer('bokeh')
+    # renderer = hv.renderer('bokeh')
     # settings.log_level('debug')
     # settings.py_log_level('debug')
     # settings.validation_level('all')
 
+    hvplot = None
     if can_plot:
         histplots_dict = {}
         jitter = (bin_width)/len(labels_plotted)/3
@@ -468,49 +483,12 @@ def main() -> int:
             #opts.NdOverlay(shared_axes=True, shared_datasource=True,show_legend=False)
             )
 
-    # TABLE/S
+        ##### HISTOGRAMS AND SPIKES TOGETHER
 
-    # df["minRC"] = df["minRC"].apply(smag)
-    # df["maxRC"] = df["maxRC"].apply(smag)
-    # df["span"] = df["span"].apply(lambda d:f"{d:>8.2%}")
-    df["span"] = df["span"].apply(lambda d: nan if np.isnan(d) else int(d*10000)/100)
-    table_plot = hv.Table(df.drop(columns=["element_ordered","AB","excluded","displayName"])
-                        .rename(
-                            columns={
-                                "span":"RC span (%)",
-                                "weighted_span" : "minRC * span"
-                                }),
-                        kdims="element"
-                    ).opts(height=260,width=1000)
-
-    if df_vrs is not None:
-        # df_vrs["minRC"] = df_vrs["minRC"].apply(smag)
-        # df_vrs["maxRC"] = df_vrs["maxRC"].apply(smag)
-        # df_vrs["span"] = df_vrs["span"].apply(lambda d:f"{d:>8.2%}")
-        df_vrs["span"] = df_vrs["span"].apply(lambda d:nan if np.isnan(d) else int(d*10000)/100)
-        table_vrs = hv.Table(df_vrs.drop(columns=["AB","displayName"]).rename(
-                            columns={
-                                "span":"RC span (%)",
-                                "weighted_span" : "minRC * span"
-                                }),
-                        kdims="element"
-                    ).opts(height=310,width=1000)
-        table_plot = ( table_plot +
-                    hv.Div("<h2>Per-function totals (in Isolated Assertions mode):</h2>").opts(height=50) +
-                    table_vrs)
-        # table_plot.opts(
-        #     opts.Table(
-        #         backend_opts={
-        #             "autosize_mode" : "fit_viewport"
-        #         },
-        #     )
-        # )
-
-    if can_plot:
-        plot = hists + spikes + table_plot #+ hist #+ violin
+        hvplot = hists + spikes #+ table_plot #+ hist #+ violin
         mf = NumericalTickFormatterWithLimit(bin_margin, format="0.0a")
 
-        plot.opts(
+        hvplot.opts(
         #     #opts.Histogram(responsive=True, height=500, width=1000),
             # opts.Layout(sizing_mode="scale_both", shared_axes=True, sync_legends=True, shared_datasource=True)
             opts.NdOverlay(
@@ -521,19 +499,62 @@ def main() -> int:
                 responsive=True
                 )
         )
-        plot.opts(shared_axes=True)
-    else:
-        plot = table_plot
+        hvplot.opts(shared_axes=True)
+        hvplot.cols(1)
 
-    plot.cols(1)
+    # TABLE/S
+
+    # df["minRC"] = df["minRC"].apply(smag)
+    # df["maxRC"] = df["maxRC"].apply(smag)
+    # df["span"] = df["span"].apply(lambda d:f"{d:>8.2%}")
+    df["span"] = df["span"].apply(lambda d: nan if np.isnan(d) else int(d*10000)/100)
+    #TODO change actually changing the df for adding a formatter
+    #TODO change col names to be shorter: succ, fails, susOoR, susFail, score
+    dft1 = df.drop(columns=["element_ordered","AB","excluded","displayName"]).rename(
+        columns={
+            "span":"span RC %",
+            "weighted_span" : "minRC*span"
+            }
+    )
+
+    table = pn.widgets.Tabulator(dft1, pagination=None,  frozen_columns=['index'], disabled=True, layout='fit_data_table', selectable=False,
+                                 height=330) #just enough to glimpse that there's more rows
+
+    table_vrs = None
+    if df_vrs is not None:
+        # df_vrs["minRC"] = df_vrs["minRC"].apply(smag)
+        # df_vrs["maxRC"] = df_vrs["maxRC"].apply(smag)
+        # df_vrs["span"] = df_vrs["span"].apply(lambda d:f"{d:>8.2%}")
+        df_vrs["span"] = df_vrs["span"].apply(lambda d:nan if np.isnan(d) else int(d*10000)/100)
+        dft2 = df_vrs.drop(columns=["AB","displayName"]).rename(
+                            columns={
+                                "span":"RC span (%)",
+                                "weighted_span" : "minRC * span"
+                                })
+
+        table_vrs = pn.widgets.Tabulator(dft2)
+        #add index col; why isnt' it there?
+        # table_plot = ( table_plot +
+        #             hv.Div("<h2>Per-function totals (in Isolated Assertions mode):</h2>").opts(height=50) +
+        #             table_vrs)
+        # table_plot.opts(
+        #     opts.Table(
+        #         backend_opts={
+        #             "autosize_mode" : "fit_viewport"
+        #         },
+        #     )
+        # )
+
+    plot = pn.Column(hvplot, table, table_vrs)
+
 
     # fig = hv.render(plot)
     # #hb = fig.traverse(specs=[hv.plotting.bokeh.Histogram])
 
     # fig.xaxis.bounds = (0,bin_fails)
 
-    title = "".join(args.paths)
-    plotfilepath = "".join(args.paths)+".html"
+    title = "-".join([os.path.splitext(os.path.basename(p))[0] for p in args.paths])
+    plotfilepath = title+".html"
 
     try:
         os.remove(plotfilepath)
@@ -542,9 +563,9 @@ def main() -> int:
 
     #renderer.save(plot, 'plot')
     # from bokeh.resources import INLINE
-    hv.save(plot, plotfilepath, title=title) #resources='inline')
+    # hv.save(plot, plotfilepath, title=title) #resources='inline')
     #hvplot.show(plot)
-    #plot.save(plotfilepath)#, resources=INLINE)
+    plot.save(plotfilepath,title=title)#, resources=INLINE)
 
     print(f"Created file {plotfilepath}")
     os.system(f"open {plotfilepath}")
