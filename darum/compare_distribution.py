@@ -51,7 +51,7 @@ def row_from_Details(v: Details):
         "span" : span,
         "OoRs" : len(v.OoR),
         "failures" : len(v.failures),
-        "is_AB" : v.is_AB,
+        "AB" : v.AB,
         #"comment": comment
     }
 
@@ -117,11 +117,11 @@ def main() -> None:
 
     ABs_present = False
     vr_past_limitRC = ""
-    df_IA = pd.DataFrame( columns=["minRC", "maxRC", "span", "successes", "OoRs","failures","is_AB"])
+    df_IA = pd.DataFrame( columns=["minRC", "maxRC", "span", "successes", "OoRs","failures","AB"])
     df_IA.index.name="Element"
 
     for k,v in results_IA.items():
-        if v.is_AB:
+        if v.AB>0:
             # we want to make sure that these are results from an IA run
             ABs_present = True
             # but we only care for the function-level results
@@ -130,7 +130,7 @@ def main() -> None:
 
     assert ABs_present
 
-    df_IA.drop(columns=["is_AB"],inplace=True)
+    df_IA.drop(columns=["AB"],inplace=True)
     df_IA["minRC * span"] = df_IA["span"] * df_IA["minRC"]
     # df_IA = df_IA.sort_values(["failures","OoRs","minRC * span"], ascending=False,kind='stable')
     # df_IA.reset_index(inplace=True)
@@ -140,15 +140,16 @@ def main() -> None:
     renamer = {c:c_IA for c, c_IA in zip(colnames, colnames_IA)}
     df_IA.rename(columns=renamer, inplace=True)
 
-    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "successes", "OoRs","failures","is_AB"])
+    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "successes", "OoRs","failures","AB"])
     df.index.name="Element"
     for k,v in results_normal.items():
-        assert not v.is_AB
+        if v.AB!=0:
+            continue
         if k not in df_IA.index.values:
             #we only want the same funcs that were contained in the IA file
             continue
         df.loc[k] = row_from_Details(v)
-    df.drop(columns=["is_AB"], inplace=True)
+    df.drop(columns=["AB"], inplace=True)
     df["minRC * span"] = df["span"] * df["minRC"]
     df = df.sort_values(["failures","OoRs","minRC * span"], ascending=False,kind='stable')
     dfc =pd.concat([df, df_IA], axis=1)
