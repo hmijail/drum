@@ -8,13 +8,14 @@ import argparse
 import hashlib
 import os
 from pathlib import Path
+import select
 import subprocess as sp
 import sys
-#from shlex import quote
 import time
 import logging as log
 import enum
 from datetime import datetime as dt, timedelta as td
+import psutil
 from quantiphy import Quantity
 from typing import NoReturn
 
@@ -24,7 +25,7 @@ def shell(str, **kwargs):
     #print(r)
     return r
 
-def main() -> NoReturn:
+def main():
     parser = argparse.ArgumentParser(description="Run dafny's measure-complexity and store the verification args in the filename of the resulting log file for easier bookkeeping.")
     parser.add_argument("dafnyfiles", nargs="+", help="The dafny file(s) to verify.")
     parser.add_argument("-e", "--extra_args", default="", help="Extra arguments to pass to dafny")
@@ -84,4 +85,53 @@ def main() -> NoReturn:
     log.info(f"Executing:{args.dafnyexec} {' '.join(arglist)}")
     sys.stdout.flush()
     sys.stderr.flush()
-    os.execvp(args.dafnyexec, arglist )
+    # os.execvp(args.dafnyexec, arglist )
+
+    #pitfalls: bufsize; blocking,
+    p = sp.Popen(arglist, bufsize=-1, stdout=sp.PIPE, stderr=sp.PIPE, text=True, process_group=0)
+    os.set_blocking(p.stdout.fileno(), False)
+    os.set_blocking(p.stderr.fileno(), False)
+    pgid = os.getpgid(p.pid)
+
+    stdout = []
+    stderr = []
+    reads: list[int] = [p.stdout.fileno(), p.stderr.fileno()]
+    while True:
+        ret = select.select(reads, [], [])[0]
+
+        for fd in ret:
+            if fd == p.stdout.fileno():
+                read = p.stdout.readline()
+                l = len(read)
+                if l>0:
+                    prefix = f'stdout({l}): ' if args.verbose>2 else ""
+                    sys.stdout.write(prefix + read)
+                    stdout.append(read)
+            if fd == p.stderr.fileno():
+                read = p.stderr.readline()
+                l = len(read)
+                if l>0:
+                    prefix = f'stderr({l}): ' if args.verbose>2 else ""
+                    sys.stderr.write(prefix + read)
+                    stderr.append(read)
+
+        if p.poll() != None:
+            break
+        else:
+            if p.stdout.closed:
+                log.warn("stdout closed")
+            if p.stderr.closed:
+                log.warn("stderr closed")
+
+    return_code = p.poll()
+    log.debug(f"{pgid=}, {return_code=}")
+
+    leaked_procs = []
+    for proc in psutil.process_iter(['pid', 'name']):
+        proc_pgid = os.getpgid(proc.info['pid'])
+        if pgid == proc_pgid:
+            log.warn(f"Leaked process: {proc.info['name']} PID={proc.info['pid']}")
+            leaked_procs.append(proc.info['pid'])
+
+    #TODO wait until pid is dead / kill proc?
+    return return_code
