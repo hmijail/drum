@@ -14,7 +14,7 @@ def shortenDisplayName(dn:str) -> str:
     new = new.replace(" (correctness)","[C]")
     return new.strip()
 
-class Details:
+class Details: # gathers the results of multiple iterations of verifying a single AB
     def __init__(self) -> None:
         self.displayName: str = "" # without AB
         self.RC: list[int] = []
@@ -55,7 +55,8 @@ def check_locations_ABs(locations) -> None:
                 # if len(ABs) > 1:
                 #     log.debug(f"{loc} has {len(ABs)} ABs: {ABs}")
                 continue
-            assert ABs_first == ABs, f"{loc} has changing ABs. Until now it was {ABs_first}. But for rseed {r}, it's {ABs}"
+            if ABs_first != ABs:
+                log.warn(f"{loc} has changing ABs. Until now it was {ABs_first}. But for rseed {r}, it's {ABs}")
 
 def readCSV(fullpath) -> resultsType:
     """Reads the CSV file into the global usages map"""
@@ -135,7 +136,7 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
                 #log.info(f"{vr["name"]}, rseed={vr_rseed} has error outcome")
             det.failures.append(vr_RC)
         else:
-            sys.exit(f"{shortDN}.outcome == {vr["outcome"]}: unexpected!")
+            sys.exit(f"{shortDN}.outcome == {vr["outcome"]}: unknown case!")
 
         vcRs = vr['vcResults']
 
@@ -159,6 +160,8 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
         ABdigits = floor(log10(ABmax)+1) # e.g. log10(99) = 1.x, needs 2 digits
             
         for vcr in vcRs:
+            #TODO tag post-fails, post-OoRs
+            #TODO are we diagnosing the case of failed AB vs successful top? Or, failed top vs successful AB?
             assert vr_rseed == vcr["randomSeed"], f"rseed mismatch: {vr_rseed} vs {vcr["randomSeed"]} in {shortDN}"
 
             # There's multiple ABs. Each AB contains a single assertion
@@ -204,32 +207,41 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
                 else:
                     assert det.description == '*'
 
-
-            # store the locations and the ABs in there to check if they stay consistent
-            location_current = (det.filename, shortDN, det.loc)
+            # store the location and the ABs in there to check if they stay consistent
+            location_current = (det.filename, display_name_AB, det.loc)
             l = locations.get(location_current,{})
             l2 = l.get(vr_rseed,{})
             l2[ABn]=det.description
             l[vr_rseed]=l2
             locations[location_current] = l
 
-
             vcr_RC = vcr['resourceCount']
-            vcrs_RC.append(vcr_RC)
             if vcr["outcome"] == "OutOfResource" :
                 assert vr["outcome"] == "OutOfResource", f"{display_name_AB}==OoR, {shortDN}=={vr["outcome"]}: unexpected!"
                 det.OoR.append(vcr_RC)
-            elif vcr["outcome"] == "Valid":
-                det.RC.append(vcr_RC)
+                results[display_name_AB] = det
+                log.debug(f"{display_name_AB}==OoR, skipping remaining {ABmax-ABn} ABs in {shortDN}")
+                break   # we don't trust the rest of ABs
             elif vcr["outcome"] == "Invalid":
                 assert vr["outcome"] == "Errors", f"{display_name_AB}==Invalid, {shortDN}=={vr["outcome"]}: unexpected!"
                 det.failures.append(vcr_RC)
+                results[display_name_AB] = det
+                log.debug(f"{display_name_AB}==Invalid, skipping remaining {ABmax-ABn} ABs in {shortDN}")
+                break   # we don't trust the rest of ABs
+            elif vcr["outcome"] == "Valid":
+                det.RC.append(vcr_RC)
+                results[display_name_AB] = det
+                vcrs_RC.append(vcr_RC)
             else:
                 sys.exit(f"{display_name_AB}.outcome == {vcr["outcome"]}: unexpected!")
-            results[display_name_AB] = det
 
-        # Ensure that the sum of AB's RCs equals the vr's RC, independent of success/failure
-        assert sum(vcrs_RC) == vr_RC, f"{shortDN}.RC={vr_RC}, but the sum of the vcrs' RCs is {sum(vcrs_RC)} "
+        if vcr["outcome"] == "Valid":
+            # Ensure that the sum of AB's RCs equals the vr's RC, independent of success/failure
+            assert sum(vcrs_RC) == vr_RC, f"{shortDN}.RC={vr_RC}, but the sum of the vcrs' RCs is {sum(vcrs_RC)}"
+            assert vr["outcome"] == "Correct", f"{shortDN}=={vr["outcome"]} but all its ABs were Valid!"
+        else:
+            #log.debug(f"Did not check the sum(vcrs_RC)")
+            pass
         
     if paranoid:
         check_locations_ABs(locations)

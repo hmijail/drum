@@ -28,12 +28,13 @@ def shell(str, **kwargs):
 def main():
     parser = argparse.ArgumentParser(description="Run dafny's measure-complexity and store the verification args in the filename of the resulting log file for easier bookkeeping.")
     parser.add_argument("dafnyfiles", nargs="+", help="The dafny file(s) to verify.")
-    parser.add_argument("-e", "--extra_args", default="", help="Extra arguments to pass to dafny")
+    parser.add_argument("-e", "--extra_args", default="", help="A quoted string of extra arguments to pass to dafny")
     parser.add_argument("-d", "--dafnyexec", default="dafny", help="The dafny executable")
     parser.add_argument("-r", "--rseed", default=str(int(time.time())),help="The random seed. By default is seeded with the current time.")
     parser.add_argument("-i", "--iter", default="10", help="Number of iterations. Default=%(default)s")
-    parser.add_argument("-f", "--format", default="json", help=argparse.SUPPRESS) # CVS needs updating
-    parser.add_argument("-l", "--limitRC", type=Quantity, default=Quantity("10M"), help="The Resource Count limit. Accepts magnitudes. Default=%(default)s")
+    # parser.add_argument("-f", "--format", default="json", help=argparse.SUPPRESS) # CVS needs updating    
+    parser.add_argument("-f", "--filter-symbol", help="Only verify symbols containing this substring.") 
+    parser.add_argument("-l", "--limitRC", type=Quantity, default=Quantity("10M"), help="The Resource Count limit. Accepts magnitudes (K,M,G...). Default=%(default)s")
     parser.add_argument("-a", "--isolate-assertions",action="store_true", help="Isolate assertions")
     parser.add_argument("-c", "--verify-included-files",action="store_true", help="Verify included files")
     parser.add_argument("-z", "--z3-path", help="Path to Z3")
@@ -61,9 +62,6 @@ def main():
     filename = os.path.join(args.output_dir, dstr + "_" + argstring4filename)
     #log.debug(f"filename={filename}")
     #shell_line = fr"{args.dafnyexec} measure-complexity --log-format csv\;LogFileName='{filename}' {args.extra_args} {args.dafnyfile}"
-    #log.info(f"Executing:{args.dafnyexec} {cli_args}")
-
-
 
     arglist = [
         args.dafnyexec,
@@ -82,7 +80,7 @@ def main():
         *args.extra_args.split(),
         *args.dafnyfiles
         ]
-    log.info(f"Executing:{args.dafnyexec} {' '.join(arglist)}")
+    log.debug(f"Executing:{args.dafnyexec} {' '.join(arglist)}")
     sys.stdout.flush()
     sys.stderr.flush()
     # os.execvp(args.dafnyexec, arglist )
@@ -124,6 +122,7 @@ def main():
                 log.warn("stderr closed")
 
     return_code = p.poll()
+    print(f"Generated logfile {filename}.{args.format}")
     log.debug(f"{pgid=}, {return_code=}")
 
     leaked_procs = []
