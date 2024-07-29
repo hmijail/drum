@@ -1,7 +1,7 @@
 [tool.poetry]
 package-mode = true
 name = "darum"
-version = "0.1.0"
+version = "0.9.0"
 description = "DAfny Resource Usage Measurement"
 authors = ["Horacio Mijail Anton Quiles <horacio.mijail@consensys.net>"]
 readme = "README.md"

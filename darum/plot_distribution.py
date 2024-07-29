@@ -107,7 +107,7 @@ def main() -> int:
     minOoR = inf # min RC of the OoR entries
     minFailures = inf # min RC of the failed entries
     maxFailures = -inf # max RC of the failed entries
-    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "successes", "OoRs","failures","AB","loc","diag","displayName","postOoR", "postFail"])
+    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","AB","loc","diag","displayName", "desc"])
     df.index.name="element"
 
     IAmode = None
@@ -122,11 +122,11 @@ def main() -> int:
         if not IAmode_detected:
             log.info(f"Setting IAmode to {args.force_IAmode}, even though detected={IAmode_detected}")
         IAmode = args.force_IAmode
-        comment_box += f"* Isolate-assertions mode = forced on\n"
+        # comment_box += f"* Isolate-assertions mode = forced on\n"
     else:
         IAmode= IAmode_detected
-        if IAmode_detected:
-            comment_box += f"* Isolate-assertions mode = detected {IAmode_detected}\n"
+        # if IAmode_detected:
+        #     comment_box += f"* Isolate-assertions mode = detected {IAmode_detected}\n"
 
     filenames : set[str]= set()
     for k,v in results.items():
@@ -171,18 +171,17 @@ def main() -> int:
         # info = f"{k:40} {len(v.RC):>10} {smag(minRC_entry):>8}    {smag(maxRC_entry):>6} {span:>8.2%}"
         # log.debug(info)
         df.loc[k] = {
-            "successes": len(v.RC),
+            "success": len(v.RC),
             "minRC" : minRC_entry,
             "maxRC" : maxRC_entry,
             "span" : span,
-            "OoRs" : len(v.OoR),
-            "failures" : len(v.failures),
+            "OoR" : len(v.OoR),
+            "fail" : len(v.failures),
             "AB" : v.AB,
             "loc"   : v.loc if filenames_only_one else f"{v.filename}:{v.loc}",
             "diag": diag,
             "displayName": v.displayName,
-            "postOoR": 0,
-            "postFail": 0
+            "desc":v.description
         }
 
     minFailures = Quantity(minFailures)
@@ -205,65 +204,62 @@ def main() -> int:
             df.loc[(df.displayName==d),"maxAB"] = max(dnABs.AB)
             ABs_present = True
 
-        # if an AB isn't successful, tag the following ones in its displayName as poisoned
-        df_OoRABs = df[(df.displayName==d) & (df.AB>0) & (df.OoRs>0)]
-        if not df_OoRABs.empty:
-            for a in df_OoRABs.AB:
-                df.loc[(df.displayName==d) & (df.AB>a),"postOoR"] += 1
-                df.loc[(df.displayName==d) & (df.AB==a),"diag"] += "⌛️"
-                df.loc[(df.displayName==d) & (df.AB>a),"diag"] += "❓"
-
-        df_failedABs = df[(df.displayName==d) & (df.AB>0) & (df.failures>0)]
-        if not df_failedABs.empty:
-            for a in df_failedABs.AB:
-                df.loc[(df.displayName==d) & (df.AB>a),"postFail"] += 1
-                df.loc[(df.displayName==d) & (df.AB==a),"diag"] += "❌"
-                df.loc[(df.displayName==d) & (df.AB>a),"diag"] += "⛔️"
-
-    # At this point, we should have each DN with AB0..n, with n==0 or n>1
+    # At this point, we should have no DNs with only AB1: either <1 or >1
     assert df.loc[df.maxAB==1].empty, f"Unexpected AB1s: {df.loc[df.maxAB==1]}"
 
-    df.loc[(df.AB==0) & (df.failures>0),"diag"] += "❌"
-    df.loc[(df.AB==0) & (df.OoRs>0),"diag"] += "⌛️"
+    # Add the emojis
+    df.loc[(df.fail>0),"diag"] += "❌"
+    df.loc[(df.OoR>0),"diag"] += "⌛️"
     # An AB that flipflops needs highlighting
-    df.loc[(df.AB==0) & ((df.failures>0) | (df.OoRs>0)) & (df.successes>0),"diag"] += "✅" 
+    df.loc[((df.fail>0) | (df.OoR>0)) & (df.success>0),"diag"] += "❗️"
 
+
+
+
+    # Scoring: span * minRC is a good starting point
+    # but ABs usually have smaller spans and smaller RCs than full functions, while big numbers are even more suspicious, so boost it
+
+    # we need a big number around the max plotted
     bigRC = minOoR
     if bigRC == inf: # there were no OoRs!
         bigRC = maxRC
     if bigRC == -inf: # there were no successes??
         bigRC == maxFailures
-
-    # A weighting formula to sort while taking into account the post-OoR/Fail
-    # span * minRC is a good starting point
-    # but ABs usually have smaller spans and smaller RCs than full functions, while big numbers are even more suspicious, so boost it
-    # Reduce scores of post-OoRs, and decimate it for post-failures
     AB_boost_factor = 5
     df["score"] = df.span * df.minRC
+    df.loc[np.isnan(df.score),"score"] = 0
+    # ABs with only 1 success have span 0. Let's help them a bit, but tag them
+    df.loc[df.success==1,"score"] = 0.01 * df.minRC
+    df.loc[(df.success==1),"diag"] += "❓"
     df.loc[df["AB"]>0,"score"] *= AB_boost_factor
-    
-    df.loc[df["OoRs"]>0,"score"] = bigRC
-    df.loc[df["failures"]>0,"score"] += bigRC * 2
-    df.score = df.score / (df.postOoR+1) / pow(10,df.postFail)
-
+    df.loc[df["OoR"]>0,"score"] += bigRC
+    df.loc[df["fail"]>0,"score"] += bigRC * 2
     df.sort_values(["score"], ascending=False, kind='stable', inplace=True)
-    # df.sort_values(["failures","OoRs"], ascending=False, kind='stable', inplace=True)
+
+
 
     # In IA mode, the focus in on the ABs. Separate them.
     if IAmode:
+        #put the desc column at the end
+        col_list = df.columns.tolist()
+        col_list.remove("desc")
+        col_list.append("desc")
+        df = df[col_list]
+
         df_vrs = df[df["AB"] == 0]
         df = df[df["AB"]>0]
         log.debug(f"vRs table:{df_vrs.shape}, ABs table:{df.shape}")
     else:
         df_vrs = None
+        df.drop(columns="desc",inplace=True)
 
     # Add a new index that reifies the current order
     df.reset_index(inplace=True)
+    df.rename_axis(index="idx",inplace=True)
     # And make it available as an alternative name. Useful for the plot legend and axis
     df['element_ordered'] = [f"{i} {s}" for i,s in zip(df.index,df["element"])]
 
-
-
+    
     if args.limitRC is None:
         if minOoR < inf:
             # There are OoRs. No limitRC was given so we couldn't check while digesting the results. But now we can check a bit.
@@ -273,7 +269,7 @@ def main() -> int:
             if mRC != inf:
                 line = f"Logs contain OoR results, but no limitRC was given. Minimum OoR RC found = {minOoR}."
                 log.info(line)
-                comment_box += f"* {line}\n"
+                # comment_box += f"* {line}\n"
                 OoRstr = f"OoR > {minOoR}"
                 if minOoR < maxRC_ABs:
                     line=f"LimitRC must have been <= {minOoR}, yet some results are higher: {maxRC_ABs=}"
@@ -378,8 +374,6 @@ def main() -> int:
             break
 
     dropped_cols = ["element_ordered","AB","excluded","displayName","maxAB"]
-    if not ABs_present:
-        dropped_cols += ["postOoR","postFail"]
     print(df.drop(columns=dropped_cols)
             # .rename(columns={
             #     "span"          : "RC span %",
@@ -441,7 +435,6 @@ def main() -> int:
             ("Log(Quantity)", "@LogQuantity"),
             ])
 
-
         bticker = BasicTicker(min_interval = 10**math.floor(math.log10(bin_width)), num_minor_ticks=0)
 
         hists = hv.NdOverlay(histplots_dict)#, kdims='Elements')
@@ -500,8 +493,8 @@ def main() -> int:
             eo = df[df["element"]==dn]["element_ordered"].values[0]
             RC = results[dn].RC
             # Represent the failures / OoRs with a spike in the last bin
-            if results[dn].OoR != [] or results[dn].failures != []:
-                RC.append(bin_centers[-1])
+            for f in range(len(results[dn].OoR)+len(results[dn].failures)):
+                RC.append(bin_centers[-1]+f*bin_width/20)
             hover2 = HoverTool(
                         tooltips=[
                             ("Element", dn),
@@ -561,26 +554,15 @@ def main() -> int:
         hvplot.opts(shared_axes=True)
         hvplot.cols(1)
 
-
-
-
     # TABLE/S
 
-    # df["minRC"] = df["minRC"].apply(smag)
-    # df["maxRC"] = df["maxRC"].apply(smag)
-    # df["span"] = df["span"].apply(lambda d:f"{d:>8.2%}")
     df["span"] = df["span"].apply(lambda d: nan if np.isnan(d) else int(d*10000)/100)
     df.minRC = df.minRC.apply(lambda x: x if abs(x)<inf else "-")
     df.maxRC = df.maxRC.apply(lambda x: x if abs(x)<inf else "-")
-    df.successes = df.successes.apply(lambda x: x if x!=0 else "-")
-    df.OoRs = df.OoRs.apply(lambda x: x if x!=0 else "-")
-    df.failures = df.failures.apply(lambda x: x if x!=0 else "-")
-    df.postOoR = df.postOoR.apply(lambda x: x if x!=0 else "-")
-    df.postFail = df.postFail.apply(lambda x: x if x!=0 else "-")
+    df.success = df.success.apply(lambda x: x if x!=0 else "-")
+    df.OoR = df.OoR.apply(lambda x: x if x!=0 else "-")
+    df.fail = df.fail.apply(lambda x: x if x!=0 else "-")
 
-
-    #TODO change actually changing the df for adding a formatter
-    #TODO change col names to be shorter: succ, fails, susOoR, susFail, score
     dft1 = df.drop(columns=dropped_cols).rename(
         columns={
             "span":"RCspan%",
@@ -593,11 +575,9 @@ def main() -> int:
         'maxRC': NumberFormatter(format='0,0', text_align = 'right'),
         # 'RCspan%': NumberFormatter(format='0.00', text_align = 'right'),
         'score': NumberFormatter(format='0,0', text_align = 'right'),
-        'successes': NumberFormatter(format='0,0', text_align = 'right'),
-        'failures': NumberFormatter(format='0,0', text_align = 'right'),
-        'OoRs': NumberFormatter(format='0,0', text_align = 'right'),
-        'postOoR': NumberFormatter(format='0,0', text_align = 'right'),
-        'postFail': NumberFormatter(format='0,0', text_align = 'right'),
+        'success': NumberFormatter(format='0,0', text_align = 'right'),
+        'fail': NumberFormatter(format='0,0', text_align = 'right'),
+        'OoR': NumberFormatter(format='0,0', text_align = 'right'),
     }
 
     table = pn.widgets.Tabulator(dft1, 
@@ -608,42 +588,59 @@ def main() -> int:
         selectable=False, 
         text_align={"diag":"center"},
         formatters=bokeh_formatters, 
-        height=330) #just enough to glimpse that there's more rows
+        height=300) #give a glimpse of more rows
 
+    table_title = None
     table_vrs = None
+    table_vrs_title = None
     if df_vrs is not None:
-        # df_vrs["minRC"] = df_vrs["minRC"].apply(smag)
-        # df_vrs["maxRC"] = df_vrs["maxRC"].apply(smag)
-        # df_vrs["span"] = df_vrs["span"].apply(lambda d:f"{d:>8.2%}")
-        df_vrs["span"] = df_vrs["span"].apply(lambda d:nan if np.isnan(d) else int(d*10000)/100)
-        dft2 = df_vrs.drop(columns=["AB","displayName"]).rename(
+        df_vrs.reset_index(inplace=True)
+        df_vrs.rename_axis(index="idx",inplace=True)
+        df_vrs["span"] = df_vrs["span"].apply(lambda d: nan if np.isnan(d) else int(d*10000)/100)
+        df_vrs.minRC = df_vrs.minRC.apply(lambda x: x if abs(x)<inf else "-")
+        df_vrs.maxRC = df_vrs.maxRC.apply(lambda x: x if abs(x)<inf else "-")
+        df_vrs.success = df_vrs.success.apply(lambda x: x if x!=0 else "-")
+        df_vrs.OoR = df_vrs.OoR.apply(lambda x: x if x!=0 else "-")
+        df_vrs.fail = df_vrs.fail.apply(lambda x: x if x!=0 else "-")
+        dft2 = df_vrs.drop(columns=dropped_cols, errors='ignore').rename(
                             columns={
                                 "span":"RCspan%",
-                                "weighted_span" : "minRC * span"
                                 })
 
-        table_vrs = pn.widgets.Tabulator(dft2, pagination=None,  frozen_columns=['index'], disabled=True, layout='fit_data_table', selectable=False, text_align={"diag":"center"},
-                                 height=330)
-        #add index col; why isnt' it there?
-        # table_plot = ( table_plot +
-        #             hv.Div("<h2>Per-function totals (in Isolated Assertions mode):</h2>").opts(height=50) +
-        #             table_vrs)
-        # table_plot.opts(
-        #     opts.Table(
-        #         backend_opts={
-        #             "autosize_mode" : "fit_viewport"
-        #         },
-        #     )
-        # )
+        table_vrs = pn.widgets.Tabulator(dft2, 
+            pagination=None,  
+            frozen_columns=['index'], 
+            disabled=True, 
+            layout='fit_data_table', 
+            selectable=False, 
+            text_align={"diag":"center"},
+            formatters=bokeh_formatters, 
+            height=300) #give a glimpse of more rows
+
+        table_title = pn.pane.Markdown("## AB-level data")
+        table_vrs_title = pn.pane.Markdown("## Member-level summary")
+
+
+
+    legend_icons = """
+### Diagnostic icons
+❌ Some iteration failed verification
+⌛️ Some iteration failed with Out of Resources
+❗️ Flipflopping result: some successes, some failures
+❓ Dubious score because there was only 1 success 
+📊 Item present in the plot
+⛔️ Item excluded from plot
+"""
+    legend_pane = pn.pane.Markdown(legend_icons)
 
     if comment_box!="":
-            comment_box = "# Comments:\n" + comment_box
-            pane_comment_box = pn.pane.Markdown(comment_box)
-            print(f"\n{comment_box}")
+        comment_box = "# Comments:\n" + comment_box
+        pane_comment_box = pn.pane.Markdown(comment_box)
+        print(f"\n{comment_box}")
     else:
         pane_comment_box = None
-    plot = pn.Column(hvplot, table, table_vrs, pane_comment_box)
-
+        
+    plot = pn.Column(hvplot, table_title, table, table_vrs_title, table_vrs, legend_pane, pane_comment_box)
 
     # fig = hv.render(plot)
     # #hb = fig.traverse(specs=[hv.plotting.bokeh.Histogram])

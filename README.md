@@ -26,7 +26,11 @@ Managing what the solver “knows” tantamounts to guiding it down the right pa
 
 ## How does Darum work?
 
-The key insights that Darum exploits are:
+Dafny's official [docs](https://dafny.org/dafny/DafnyRef/DafnyRef.html#sec-brittle-verification) and [tools](https://github.com/dafny-lang/dafny-reportgenerator/blob/main/README.md) use statistical measures like stddev and RMS% to measure verification brittleness. However, we argue that it's more useful to think of simple min/max values. For example, consider the case of running 10 iterations of the verification process, in which 9 of the results are closely clustered but one single result deviates far away, being either much cheaper or much more expensive than the rest. Taking the stddev or RMS of these 10 cases would dampen the extremes, while we argue that they are precious hints that needs to be highlighted instead. Indeed, each time that the verification runs, these rare but extreme values are the ones with potential to turn things unexpectedly slow or fast, and to point towards problems or fixes. Furthermore, AB variability seems to compose disproportionally into more extreme variability at the member level, multiplying the effect of AB's span. This all suggests that, for reliability, it's necessary to minimize the span of Resource Usage costs.
+
+It's worth noting that, while we're focusing on RU variability to combat brittleness, these tools are also useful to account for plain RU usage and rank where the verification time is being spent in the code.
+
+In a nutshell, the key insights that Darum exploits are:
 * The RU needed to verify any Dafny code pertains to a probability distribution of evolving shape.
 * These distributions tend to grow wide and multimodal, causing the user to think that some problem appears and disappears – as opposed to a cost varying across a smooth range.
 * The distributions of ABs compound to members' distributions worse than linearly, hence fixing narrow distributions in ABs can have outsized effects higher up.
@@ -34,12 +38,12 @@ The key insights that Darum exploits are:
 ### An evolving probability distribution?
 
 Consider the evolution of a piece of Dafny code:
-* When the code is simple, the distribution is close to a spike: every verification run returns a predictable value.
-* As the code grows and turns more complicated, the distribution starts to widen, and so time/RU needed for verification starts to vary. Perversely, this is hard to notice initially because probably the worst case is still fast enough that the user doesn't stop to think about it: the code is growing, so growing verification time is in principle to be expected. Furthermore, in a bigger codebase in which individual members are only starting to misbehave, the total distribution tends to smooth and statistically compensate for the individual variation.
-* At some point, some AB/member's verification gets complex enough that its distribution turns multimodal: sometimes verification runs fast, sometimes it runs much more slowly. Even worse, when this happens in one AB/member, because of how Dafny + Boogie + Z3 work internally, that randomness will keep affecting the total distribution even while working on other ABs/members.
+* When the code is simple, the distribution is close to a spike: every verification run has a predictable cost.
+* As the code grows and turns more complicated, the cost distribution starts to widen, and so time/RU needed for verification starts to vary. Perversely, this is hard to notice initially because probably the worst case is still fast enough that the user doesn't stop to think about it: the code is growing, so growing verification time is in principle to be expected. Worse, in a bigger codebase in which individual members are only starting to misbehave, the total distribution naturally tends to smooth and statistically compensate for the individual variation.
+* At some point, some AB/member's verification gets complex enough that its distribution turns multimodal: sometimes verification runs fast, sometimes it runs much more slowly. Even worse, when this happens in one AB/member, because of how Dafny + Boogie + Z3 work internally, that randomness will keep affecting the total distribution even while working on other ABs/members. It is at this point that the user starts noticing that errors or timeouts appear and disappear without explanation.
 * As work progresses, other members' distributions will keep widening and also turn multimodal, each of them affecting the total distribution with new modes.
 
-The final result is that one starts editing line X of a Dafny file and suddenly verification fails in a surprising, seemingly unrelated way. Doing some small change might seem to restore the good behavior - but this is an illusion caused by the multimodality of the distribution. In fact, redoing the latest changes now seems to work well after all! One shrugs the problem off and pushes forward, but 2 lines later again the failure appears. *One can't pinpoint why changes to a member sometimes cause a timeout but other times verify correctly; what seemed a stable configuration suddenly stops working even though everything seems to be the same. After some busywork suddenly things seem OK, so again one pushes forward... until next stop.*
+The result is that one starts editing line X of a Dafny file and suddenly verification fails in a surprising, seemingly unrelated way. Doing some small change might seem to restore the good behavior - but this is an illusion caused by the multimodality of the distribution. In fact, redoing the latest changes now seems to work well after all! One shrugs the problem off and pushes forward, but 2 lines later again the failure appears. *One can't pinpoint why changes to a member sometimes cause a timeout while other times verify correctly; what seemed a stable configuration suddenly stops working even though everything seems to be the same. After some busywork suddenly things seem OK, so again one pushes forward... until next stop.*
 
 It might be amusing to note the unfortunate similarity of this situation to that of Skinner's variable ratio reinforcement: random actions seem to trigger unexplained positive outcomes, [causing the subject to develop superstition-like behaviors](https://psychclassics.yorku.ca/Skinner/Pigeon/) with the hope of triggering further positive outcomes. 
 
@@ -54,7 +58,7 @@ The problem is that Z3 randomly [^3] follows a different path each time, and so 
 IA mode breaks down a member's standard single AB into as many ABs as DAs. E.g., if member M contains DA1 and DA2, AB2 would be equivalent to `assume DA1; assert DA2`.
 
 One intriguing result of using IA mode is that the sum of the cost of the isolated ABs in a member is *typically* much more expensive than verifying the whole member as a single AB, but also much more stable. This suggests 2 possibilities:
-  - Stabilisation by pessimisation: break down every member into smaller members [^2].
+  - Stabilisation by pessimisation: break down every member into smaller members [^2][^4].
   - Conversely, sometimes ABs require higher RU than the containing member, or even fail to verify. This likely means that previous DAs in the member built up some context that helped / was necessary for the current DA to pass verification. Notably, this context includes facts that the solver “discovered” while proving previous DAs, and which will be missing when those DAs are `assume`d. It’s **a case where DAs grouped into an AB help each other**.
 
 Consider that, as code evolves, DAs (both explicit and implicit) change, creating different possible paths for the solver. A member whose DAs support each other but don't unduly widen the horizon would then create a robust path, resilient to small changes. In contrast, a member whose DAs only tangentially build on each other and that widen the horizon unnecessarily will be vulnerable, or even prone, to a wide variation of costs.
@@ -62,6 +66,7 @@ Consider that, as code evolves, DAs (both explicit and implicit) change, creatin
 While the first impulse might be to limit the length of members, and this would help in a way, note that the length is not the real problem. The key consideration is whether the DAs in the member build on each other robustly.
 
 [^2]: Either by physically defining new members, or using facilities like {:split_here} XXX or IA mode itself.
+[^4]: Dafny seems to be following this path towards using IA mode by default. link XXX
 
 ### So how does Darum help?
 
@@ -123,11 +128,21 @@ $ compare_distribution XYZ.log -i XYZ_IA.log
 ...
 ```
 
+#### How many iterations to run with dafny_measure? (`-i` argument)
+In practice, 5-10 iterations seem to work well. Bigger numbers (100 iterations or more) might be interesting just to get an idea of how the distribution really looks like, what are its modes, and how extreme it can get.
+
 ## Interpreting the results
+
+
 
 ### The plots
 
 #### Plain plots
+
+##### What is an acceptable span?
+Badly behaving members seem to blow up their span rather abruptly, so after a couple of experiments one will quickly get a feeling of which members are OK and which ones need work. However, as a rule of thumb: in IA mode, spans seem to get exponential once they go over 5%. In standard mode, this happens over 10%.
+(XXX possible interesting question: is it exponential, or is there a discontinuity? if so, why?)
+
 
 ##### Worst offenders
 
@@ -142,38 +157,39 @@ Verification results that happen rarely are specially important. Hence, the Y ax
 
 #### Comparative plots
 
-The plot compares RUs of members verified in standard mode (plotted as X) against the sum RUs of those same members verified in IA mode (plotted as spikes). The comparisons are always member-wise. Things to notice in each member, in order of attention needed:
-* Ideal behavior happens when the X are clustered together (meaning stability) and are much farther to the left (meaning cheaper) than the spikes, which will also be clustered together. This is the typical situation for short members.
+This type of plot compares RUs of members verified in standard mode (plotted with X symbols) against the RU sum of those same members verified in IA mode (plotted as spikes). The comparisons are always member-wise. Note the Log X axis. Things to notice in each member, in order of attention needed:
+* Ideal behavior happens when the X are clustered together (meaning stability) and are much farther to the left (meaning cheaper) than the spikes, which will also be clustered together. This is the typical situation for short and simple members.
 * Bigger X dispersion means bigger brittleness in standard mode. If meanwhile the spikes are clustered, they give a reference of the stability what could be attained by pessimisation. Notably, if some of the X turn out to be more expensive than the spikes, this is a clear indication that action is needed.
-* If the spikes are dispersed, this means that even the individual ABs show brittleness. It's advisable to plot individually the IA mode log to find what part of the code is causing it, and use any of the possible remedies mentioned further down.
+* If even the spikes are dispersed, this means that even the individual ABs show brittleness. It's advisable to plot individually the IA mode log to find what part of the code is causing it, and use any of the possible remedies mentioned further down.
 
 ### The table/s
 
-Distribution plots for "standard mode" verifications contain a table analyzing the logs. For convenience, the column "diag" in the table summarizes the situation for each row with a series of emojis:
+Standard mode distribution plots contain a table analyzing the logs. For convenience, the column "diag" in the table summarizes the situation for each row with a series of icons:
 * 📊 : This element was plotted because was among the top scores.
 * ⌛️ : This element finished as Out of Resources.
 * ❌ : This element explicitly failed verification.
-* ✅ : This element had *both* successful and failed/OoR results. Note that purely successful results are not highlighted because they're the hoped default; but this unstable case will probably be worth paying attention to.
+* ❗️ : This element had *both* successful and failed/OoR results. Note that purely successful results are not highlighted because they're the hoped default; but fliflopping results merit extra attention. According to the Dafny team (link XXX), as long as there is a successful result, the goal should be to stabilize it to remove the failures – as opposed to discarding the success because of the failures.
 
-Additionally, IA mode distribution plots contain 2 tables: the second one is equivalent to the one just described, only it shows the RU of the sum of a member's ABs' RUs. In contrast, the first table for these plots shows the ABs themselves, and show a couple of extra cases:
-* ⛔️ : This AB came after an AB that failed in the same member. This means that the current AB was prepended with the equivalent of `assume false`. Hence, it should be discarded. (XXX probably they should actually be removed from the tables and plots??)
-* ❓ : This AB came after an AB that had an OoR in the same member. *If that previous AB would actually fail given enough resources,* then the current AB should be discarded. The only way to know is to re-verify with a higher limit to avoid the OoR.
+IA mode distribution plots contain 2 tables. The first one is equivalent to the one just described, only applied to the individual ABs. The second table shows the summary data at the member level, still in IA mode.
+
+These tables will naturally suggest questions about how members' results compare in IA mode and in standard mode. These questions should be easier to answer through the `compare_distribution` plots.
 
 ### Comments
 
-### General discussion
+If interesting/atypical situations were detected while preparing the plots, they will be listed in a Comments section at the bottom of the plot page.
 
-Rule of thumb: isolated assertions: AB have span <3%. Full funcs/methods < 10%.
 
-Dafny's official [docs](https://dafny.org/dafny/DafnyRef/DafnyRef.html#sec-brittle-verification) and [tools](https://github.com/dafny-lang/dafny-reportgenerator/blob/main/README.md) use statistical measures like stddev and RMS% to measure verification brittleness. However, we argue that it's more useful to think of simple min/max values. For example, consider the case of running 10 iterations of the verification process, in which 9 of the results are closely clustered but one single result deviates far away, being either much cheaper or much more expensive than the rest. Taking the stddev or RMS of these 10 cases would dampen the extremes, while we argue that they are precious hints that needs to be highlighted instead. Indeed, each time that the verification runs, these rare but extreme values are the ones with potential to turn things unexpectedly slow or fast. Furthermore, AB variability seems to compose disproportionally into more extreme variability at the member level, multiplying the effect of AB's span. This all suggests that, for reliability, it's necessary to minimize the span of Resource Usage costs.
+## Pitfalls
 
-It's worth noting that, while we're focusing on RU variability to combat brittleness, these tools are also useful to account for plain RU usage and rank where the verification time is being spent in the code.
+### Start in standard mode, dig into IA mode once a problem is apparent
 
-### Pitfalls
-
-As mentioned, a member can verify stably in normal mode, in IA mode present ABs that are surprisingly brittle or even fail. The significance of this situation is unclear (XXX), therefore:
+As mentioned, a member can verify stably in normal mode, while in IA mode present ABs that are surprisingly brittle or even fail. The significance of this situation is unclear (XXX), therefore:
 1. Probably there's no immediate harm in leaving the member as it is. However, you might still want to keep an eye on it in case that any small change in the member triggers brittleness.
-2. More importantly, It's probably best to focus on fixing problems that can be first be found at the member level with standard verification mode. On the contrary, starting by looking for problems at the IA mode might cause you to spend effort on trouble that isn't really there. Dafny's `--filter-symbol` is a great way to avoid the temptation of fishing for unnecessary trouble in IA mode.
+2. More importantly, It's probably best to **focus on fixing problems that can be first be found at the member level with standard verification mode**. On the contrary, starting by looking for problems at the IA mode might cause you to spend effort on trouble that maybe isn't really there. Dafny's `--filter-symbol` is a great way to avoid the temptation of fishing for unnecessary trouble in IA mode.
+
+### Keep in mind that, in IA mode, ABs are "chained". If one fails, the rest are removed.
+
+To minimize noise, once an AB fails in IA mode, we ignore subsequent ABs in the same iteration. In such a case, the tables will show that some ABs have a smaller number of results than previous ones. In the extreme case of only 1 result remaining for a given AB, it will be tagged with the ❗️ icon.
 
 ## Some remedies to keep in mind
 

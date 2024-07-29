@@ -1,13 +1,11 @@
 #! python3
 
 import argparse
-import math
-import re
-import sys
 #from matplotlib import table
+import panel as pn
 from quantiphy import Quantity
 import logging as log
-from math import inf
+from math import inf, nan
 import os
 import numpy as np
 import pandas as pd
@@ -17,6 +15,7 @@ from pathlib import Path
 
 from bokeh.models import NumeralTickFormatter, HoverTool
 from bokeh.util.compiler import TypeScript
+from bokeh.models.widgets.tables import NumberFormatter
 
 
 def smag(i) -> str:
@@ -45,40 +44,45 @@ def row_from_Details(v: Details):
     # info = f"{k:40} {len(v.RC):>10} {smag(minRC_entry):>8}    {smag(maxRC_entry):>6} {span:>8.2%}"
     # log.debug(info)
     return {
-        "successes": len(v.RC),
+        "success": len(v.RC),
         "minRC" : minRC_entry,
         "maxRC" : maxRC_entry,
         "span" : span,
-        "OoRs" : len(v.OoR),
-        "failures" : len(v.failures),
+        "OoR" : len(v.OoR),
+        "fail" : len(v.failures),
         "AB" : v.AB,
         #"comment": comment
     }
 
 
 class NumericalTickFormatterWithLimit(NumeralTickFormatter):
-    margin = 0
+    min_fail = 0
+    min_OoR = 0
 
-    def __init__(self, margin:int, **kwargs):
+    def __init__(self, min_OoR, min_fail, **kwargs):
         super().__init__(**kwargs)
-        NumericalTickFormatterWithLimit.margin = margin
+        assert min_OoR < min_fail
+        NumericalTickFormatterWithLimit.min_fail = min_fail
+        NumericalTickFormatterWithLimit.min_OoR = min_OoR
         NumericalTickFormatterWithLimit.__implementation__ = TypeScript(
 """
-import {NumeralTickFormatter} from "models/formatters/numeral_tick_formatter"
+import {NumeralTickFormatter} from 'models/formatters/numeral_tick_formatter'
 
 export class NumericalTickFormatterWithLimit extends NumeralTickFormatter {
     static __name__ = '""" + __name__ + """.NumericalTickFormatterWithLimit'
-    FAIL_MIN=""" + str(int(margin)) + """
-
+    MIN_FAIL=""" + str(int(min_fail)) + """
+    MIN_OOR=""" + str(int(min_OoR)) + """
     doFormat(ticks: number[], _opts: {loc: number}): string[] {
         const formatted = []
         const ticks2 = super.doFormat(ticks, _opts)
         for (let i = 0; i < ticks.length; i++) {
-        if (ticks[i] < this.FAIL_MIN) {
-            formatted.push(ticks2[i])
-        } else {
-            formatted.push('FAILED')
-        }
+            if (ticks[i] < this.MIN_OOR) {
+                formatted.push(ticks2[i])
+            } else if (ticks[i] < this.MIN_FAIL) {
+                formatted.push('OoR')
+            } else {
+                formatted.push('FAIL')
+            }
         }
         return formatted
     }
@@ -95,7 +99,7 @@ def main() -> None:
     # #parser.add_argument("-d", "--RCspan", type=int, default=10, help="The span maxRC-minRC (as a % of max) over which a plot is considered interesting")
     # parser.add_argument("-x", "--exclude", action='append', default=[], help="DisplayNames matched by this regex will be excluded from plot")
     # #parser.add_argument("-o", "--only", action='append', default=[], help="Only plot DisplayNames with these substrings")
-    # parser.add_argument("-t", "--top", type=int, default=5, help="Plot only the top N most interesting")
+    parser.add_argument("-t", "--top", type=int, default=20, help="Plot only the top N most interesting")
     # parser.add_argument("-s", "--stop", default=False, action='store_true', help="Process the data but stop before plotting")
     # parser.add_argument("-a", "--IAmode", default=False, action='store_true', help="Isolated Assertions mode. Used only for sanity checking.")
     parser.add_argument("-l", "--limitRC", type=Quantity, default=None, help="The RC limit used during verification. Used only for sanity checking.")
@@ -117,7 +121,7 @@ def main() -> None:
 
     ABs_present = False
     vr_past_limitRC = ""
-    df_IA = pd.DataFrame( columns=["minRC", "maxRC", "span", "successes", "OoRs","failures","AB"])
+    df_IA = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","AB"])
     df_IA.index.name="Element"
 
     for k,v in results_IA.items():
@@ -131,8 +135,8 @@ def main() -> None:
     assert ABs_present
 
     df_IA.drop(columns=["AB"],inplace=True)
-    df_IA["minRC * span"] = df_IA["span"] * df_IA["minRC"]
-    # df_IA = df_IA.sort_values(["failures","OoRs","minRC * span"], ascending=False,kind='stable')
+    df_IA["score"] = df_IA["span"] * df_IA["minRC"]
+    # df_IA = df_IA.sort_values(["failures","OoRs","score"], ascending=False,kind='stable')
     # df_IA.reset_index(inplace=True)
     # df_IA['Element_ordered'] = [f"{i} {s}" for i,s in zip(df_IA.index,df_IA["Element"])]
     colnames = [e for e in df_IA.columns.values if e != "Element"]
@@ -140,7 +144,7 @@ def main() -> None:
     renamer = {c:c_IA for c, c_IA in zip(colnames, colnames_IA)}
     df_IA.rename(columns=renamer, inplace=True)
 
-    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "successes", "OoRs","failures","AB"])
+    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","AB"])
     df.index.name="Element"
     for k,v in results_normal.items():
         if v.AB!=0:
@@ -150,23 +154,22 @@ def main() -> None:
             continue
         df.loc[k] = row_from_Details(v)
     df.drop(columns=["AB"], inplace=True)
-    df["minRC * span"] = df["span"] * df["minRC"]
-    df = df.sort_values(["failures","OoRs","minRC * span"], ascending=False,kind='stable')
+    df["score"] = df["span"] * df["minRC"]
+    df = df.sort_values(["fail","OoR","score"], ascending=False,kind='stable')
     dfc =pd.concat([df, df_IA], axis=1)
 
     df = dfc
     df.reset_index(inplace=True)
     df['Element_ordered'] = [f"{i} {s}" for i,s in zip(df.index,df["Element"])]
 
-
     maxRC = max(max(df["maxRC"]),max(df["maxRC IA"]))
     minRC = min(min(df["minRC"]),min(df["minRC IA"]))
-    RCmargin = maxRC * 1.5
-    RCOoR = maxRC * 2
-    RCfailure = maxRC * 2.5
-    sep = 1.0001 #separation between spikes/markers faked into the OoR/fail areas
+    RCmargin1 = maxRC * 1.2
+    RCOoR = maxRC * 1.4
+    RCmargin2 = maxRC * 1.6
+    RCfailure = maxRC * 1.8
+    sep = 1.01 #separation between spikes/markers faked into the OoR/fail areas
 
-    failstr: str = "OoR/FAILED"
 
 
     # HOLOVIEWS
@@ -188,20 +191,22 @@ def main() -> None:
     RCFfunc = CustomJSHover(code='''
             var value;
             var modified;
-            if (value > ''' + str(int(maxRC)) + ''') {
-                modified = "''' + failstr + '''";
+            if (value > ''' + str(int(RCmargin2)) + ''') {
+                modified = "FAILED";
+            } else if (value > ''' + str(int(RCmargin1)) + ''') {
+                modified = "OoR";
             } else {
                 modified = value.toString();
             }
             return modified
     ''')
 
-    labels_plotted = df["Element"].values
+    labels_plotted = df["Element"].values[:args.top]
     nlabs = len(labels_plotted)
     spikes_dict = {}
     scatter_dict = {}
     for i,dn in enumerate(labels_plotted):
-        eo = df[df["Element"]==dn]["Element_ordered"].values[0]
+        eo = df.loc[df["Element"]==dn,"Element_ordered"].values[0]
         RCs_IA = results_IA[dn].RC
         RCs_normal = results_normal[dn].RC
         # Represent the failures / OoRs with a spike/dot at x=RCfailure
@@ -310,41 +315,68 @@ def main() -> None:
 
     )
 
-    # A vertical line separating the fails bar
-    # disabled because it disables the autoranging of the histograms
-    # vline = hv.VLine(RCmargin).opts(
-    #     opts.VLine(color='black', line_width=1, autorange='y',ylim=(0,None))
-    # )
-    vspan = hv.VSpan(RCmargin,RCmargin*10).opts(
+    vspan = hv.VSpan(RCmargin1).opts(
         opts.VSpan(color='#FF000030',show_legend=False) # transparent red
     )
-
-
+    vspan = vspan * hv.VSpan(RCmargin2).opts(
+        opts.VSpan(color='#FF000030',show_legend=False)
+    )
 
     # TABLE
 
-    df["span IA"] = df["span IA"].apply(lambda s: int(s*1000)/10.0)
-    df["span"] = df["span"].apply(lambda s: int(s*1000)/10.0)
     df.drop(columns=["Element_ordered"], inplace=True)
+    df["span"] = df["span"].apply(lambda d: nan if np.isnan(d) else int(d*10000)/100)
+    df["span IA"] = df["span IA"].apply(lambda d: nan if np.isnan(d) else int(d*10000)/100)
+    df["minRC"] = df["minRC"].apply(lambda x: x if abs(x)<inf else "-")
+    df["minRC IA"] = df["minRC IA"].apply(lambda x: x if abs(x)<inf else "-")
+    df["maxRC"] = df["maxRC"].apply(lambda x: x if abs(x)<inf else "-")
+    df["maxRC IA"] = df["maxRC IA"].apply(lambda x: x if abs(x)<inf else "-")
+    df["success"] = df["success"].apply(lambda x: x if x!=0 else "-")
+    df["success IA"] = df["success IA"].apply(lambda x: x if x!=0 else "-")
+    df["OoR"] = df["OoR"].apply(lambda x: x if x!=0 else "-")
+    df["OoR IA"] = df["OoR IA"].apply(lambda x: x if x!=0 else "-")
+    df["fail"] = df["fail"].apply(lambda x: x if x!=0 else "-")
+    df["fail IA"] = df["fail IA"].apply(lambda x: x if x!=0 else "-")
+
     df.rename(columns={
-            "span":"RC span%",
-            "span IA":"RC span% IA"
+            "span":"RCspan%",
+            "span IA":"RCspan% IA",
         },inplace=True)
 
     print(df)
-    table = hv.Table(df).opts(height=310,width=800)
+
+    bokeh_formatters = {
+        'minRC': NumberFormatter(format='0,0', text_align = 'right'),
+        'maxRC': NumberFormatter(format='0,0', text_align = 'right'),
+        # 'RCspan%': NumberFormatter(format='0.00', text_align = 'right'),
+        'score': NumberFormatter(format='0,0', text_align = 'right'),
+        'success': NumberFormatter(format='0,0', text_align = 'right'),
+        'fail': NumberFormatter(format='0,0', text_align = 'right'),
+        'OoR': NumberFormatter(format='0,0', text_align = 'right'),
+    }
+    bf_keys = list(bokeh_formatters.keys())
+    for k in bf_keys:
+        bokeh_formatters[k+" IA"]=NumberFormatter(format='0,0', text_align = 'right')
+
+    table = pn.widgets.Tabulator(df,
+            pagination=None,
+            frozen_columns=['index'],
+            disabled=True,
+            layout='fit_data_table',
+            selectable=False,
+            text_align={"diag":"center"},
+            formatters=bokeh_formatters,
+            height=300) #give a glimpse of more rows
 
     # table = hv.Div("<h2>Normal mode:</h2>").opts(height=50) + table
 
 
-    plot = scatter * spikes * vspan + table
-    plot.cols(1)
+    hvplot = scatter * spikes * vspan
+    # hvplot.cols(1)
 
+    mf = NumericalTickFormatterWithLimit(RCmargin1, RCfailure, format="0.0a")
 
-
-    mf = NumericalTickFormatterWithLimit(RCmargin, format="0.0a")
-
-    plot.opts(
+    hvplot.opts(
     #     #opts.Histogram(responsive=True, height=500, width=1000),
         # opts.Layout(sizing_mode="scale_both", shared_axes=True, sync_legends=True, shared_datasource=True)
         opts.NdOverlay(
@@ -356,6 +388,9 @@ def main() -> None:
             show_legend=False,
             )
     )
+
+    plot = pn.Column(hvplot, table)
+
     # plot.opts(shared_axes=True)
 
     # fig = hv.render(plot)
@@ -371,7 +406,7 @@ def main() -> None:
     except:
         pass
 
-    hv.save(plot, plotfilepath)#, title=title)
+    plot.save(plotfilepath)#, title=title)
 
 
     print(f"Created file {plotfilepath}")
