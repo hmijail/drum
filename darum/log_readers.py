@@ -158,7 +158,8 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
 
         ABmax = max([vcr['vcNum'] for vcr in vcRs])
         ABdigits = floor(log10(ABmax)+1) # e.g. log10(99) = 1.x, needs 2 digits
-            
+        
+        skipping_reason = None
         for vcr in vcRs:
             #TODO tag post-fails, post-OoRs
             #TODO are we diagnosing the case of failed AB vs successful top? Or, failed top vs successful AB?
@@ -168,12 +169,19 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
             ABn = vcr['vcNum']
             display_name_AB: str =f"{shortDN} B{ABn:0{ABdigits}}"
 
+            if skipping_reason is not None:
+                if skipping_reason=="Fail" and vcr["outcome"] != "Valid":
+                    # this situation should be equivalent to "assume False && assert X", so should never fail??
+                    log.warn(f"Skipping after an AB failed, yet {display_name_AB}=={vr["outcome"]}")
+                continue
+
             det = results.get(display_name_AB)
             if det is None:
                 det = Details()
                 det.AB = ABn
                 det.displayName = shortDN
 
+            # Extract the filename, location and descriptions
             if len(vcr['assertions'])==0:
                 # e.g. every AB1 in IAmode
                 if det.loc == "":
@@ -215,19 +223,20 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
             l[vr_rseed]=l2
             locations[location_current] = l
 
+            # store the RCs according to result
             vcr_RC = vcr['resourceCount']
             if vcr["outcome"] == "OutOfResource" :
                 assert vr["outcome"] == "OutOfResource", f"{display_name_AB}==OoR, {shortDN}=={vr["outcome"]}: unexpected!"
                 det.OoR.append(vcr_RC)
                 results[display_name_AB] = det
                 log.debug(f"{display_name_AB}==OoR, skipping remaining {ABmax-ABn} ABs in {shortDN}")
-                break   # we don't trust the rest of ABs
+                skipping_reason = "OoR"
             elif vcr["outcome"] == "Invalid":
                 assert vr["outcome"] == "Errors", f"{display_name_AB}==Invalid, {shortDN}=={vr["outcome"]}: unexpected!"
                 det.failures.append(vcr_RC)
                 results[display_name_AB] = det
                 log.debug(f"{display_name_AB}==Invalid, skipping remaining {ABmax-ABn} ABs in {shortDN}")
-                break   # we don't trust the rest of ABs
+                skipping_reason = "Fail"
             elif vcr["outcome"] == "Valid":
                 det.RC.append(vcr_RC)
                 results[display_name_AB] = det
@@ -235,8 +244,7 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
             else:
                 sys.exit(f"{display_name_AB}.outcome == {vcr["outcome"]}: unexpected!")
 
-        if vcr["outcome"] == "Valid":
-            # Ensure that the sum of AB's RCs equals the vr's RC, independent of success/failure
+        if skipping_reason is None: # we reached the end of this vR without fails
             assert sum(vcrs_RC) == vr_RC, f"{shortDN}.RC={vr_RC}, but the sum of the vcrs' RCs is {sum(vcrs_RC)}"
             assert vr["outcome"] == "Correct", f"{shortDN}=={vr["outcome"]} but all its ABs were Valid!"
         else:
