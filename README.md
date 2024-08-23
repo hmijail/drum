@@ -6,9 +6,9 @@ Tools to detect and diagnose brittle verification.
 
 Dafny verifies code by translating it into Assertion Batches in the Boogie language, that then are verified by the Z3 solver.
 
-For a long time, the common advice to make a piece of Dafny code verify successfully was to add information (through assertions) to help Z3 find a solution. However, since Dafny 3.x there’s been a growing effort to add facilities to the language to limit what information reaches the Z3 solver. This is because the solver can sometimes have "too much information" and go down unproductive paths while looking for a solution. This bogs down the development process by causing longer verification times or timeouts instead of definite answers, and is a very common pain point in Dafny (and the wider Z3 / SMT solver ecosystem).
+Complex Dafny code typically takes a long time to verify. Until recently, the common advice to help Dafny code verify successfully was to add information to the code through assertions, to help Z3 find a solution. However, since Dafny 3.x there’s been a growing effort to add facilities to the language to actually limit what information reaches Z3. This is because the solver can sometimes have "too much information" and go down unproductive paths while looking for a solution. This bogs down the development process by causing longer verification times or timeouts instead of definite answers, and is a very common pain point for Dafny users.
 
-Managing what the solver “knows” tantamounts to guiding it down the right path by removing alternatives. The problem then is that Dafny's automation, compared to interactive theorem provers, inherently makes it more difficult to know at any point what is actually the right path and what does the solver actually know. Indeed, at the Dafny level (as opposed to digging into Boogie and Z3), the only information we get about the process is the result (verification successful, failure or timeout), plus how costly was it for the solver to reach that result. This cost is measured in arbitrary units of "Resource Usage", and is what Darum tries to exploit.
+The user can guide Z3 down the right path by removing alternatives, that is, controlling what the solver “knows”. The problem then is that Dafny inherently makes it difficult to know at any point what is actually the right path and what does the solver actually know. Indeed, at the Dafny level (as opposed to digging into Boogie and Z3), the only information we get about the process is the result (verification successful, failure or timeout), plus how costly was it for the solver to reach that result. These results are what Darum tries to glean information from.
 
 **Darum helps the user find patterns in the solver costs, discovering hints to guide the debugging of verification brittleness. It does so by analysing and comparing the cost of verification at different granularities of the Assertion Batches, in a mostly automated way, by using existing Dafny facilities.**
 
@@ -26,14 +26,14 @@ Managing what the solver “knows” tantamounts to guiding it down the right pa
 
 ## How does Darum work?
 
-Dafny's official [docs](https://dafny.org/dafny/DafnyRef/DafnyRef.html#sec-brittle-verification) and [tools](https://github.com/dafny-lang/dafny-reportgenerator/blob/main/README.md) use statistical measures like stddev and RMS% to measure verification brittleness. However, we argue that it's more useful to think of simple min/max values. For example, consider the case of running 10 iterations of the verification process, in which 9 of the results are closely clustered but one single result deviates far away, being either much cheaper or much more expensive than the rest. Taking the stddev or RMS of these 10 cases would dampen the extremes, while we argue that they are precious hints that needs to be highlighted instead. Indeed, each time that the verification runs, these rare but extreme values are the ones with potential to turn things unexpectedly slow or fast, and to point towards problems or fixes. Furthermore, AB variability seems to compose disproportionally into more extreme variability at the member level, multiplying the effect of AB's span. This all suggests that, for reliability, it's necessary to minimize the span of Resource Usage costs.
+Dafny's official [docs](https://dafny.org/dafny/DafnyRef/DafnyRef.html#sec-brittle-verification) and [tools](https://github.com/dafny-lang/dafny-reportgenerator/blob/main/README.md) use statistical measures like stddev and RMS% to measure verification brittleness. However, we argue that it's more useful to think of simple min/max values. For example, consider the case of running 10 iterations of the verification process, in which 9 of the results are closely clustered but one single result deviates far away, being either much cheaper or much more expensive than the rest. Taking the stddev or RMS of these 10 cases would obviously dampen the extremes, while we argue that they are precious hints that needs to be highlighted instead. Indeed, each time that the verification runs, these rare but extreme values are the ones that will turn things unexpectedly slow or fast, and so they point towards problems or fixes. Furthermore, AB variability seems to compose disproportionally into more extreme variability at the member level, multiplying the effect of AB's span. This all suggests that, for reliability, it's necessary to minimize the span of Resource Usage costs.
 
-It's worth noting that, while we're focusing on RU variability to combat brittleness, these tools are also useful to account for plain RU usage and rank where the verification time is being spent in the code.
+It's worth noting that, while we're focusing on RU variability to combat brittleness, these tools are also useful for plain optimization, since they help account for plain RU usage and rank where the verification time is being spent.
 
 In a nutshell, the key insights that Darum exploits are:
 * The RU needed to verify any Dafny code pertains to a probability distribution of evolving shape.
 * These distributions tend to grow wide and multimodal, causing the user to think that some problem appears and disappears – as opposed to a cost varying across a smooth range.
-* The distributions of ABs compound to members' distributions worse than linearly, hence fixing narrow distributions in ABs can have outsized effects higher up.
+* The distributions of ABs compound to members' distributions worse than linearly. Hence, relatively narrow distributions at the AB level compound to much wider distributions for the containing members.
 
 ### An evolving probability distribution?
 
@@ -82,14 +82,14 @@ Darum can be used to:
 ## What exactly is Darum?
 
 Darum consists of 3 loosely coupled tools:
-* `dafny_measure`: a tool to ease usage of `dafny measure-complexity`, with sensible defaults and easier management of the generated logs, by recording:
+* `dafny_measure`: a wrapper around `dafny measure-complexity` for easier management of the generated logs, by recording:
   - The timestamp
   - The arguments used
   - part of the input file's hash, to ensure that multiple logs can be meaningfully compared
 
   Additionally, `dafny_measure` warns if `dafny` misbehaves, like when z3 processes are leaked (bug XXX).
-* `plot_distribution`: a tool to be run on the logs generated by `dafny measure-complexity`. It runs some tests on the verification results contained in the log, scores them for improvement potential, presents the results in summary tables, and plots the most interesting results for further analysis.
-* `compare_distribution`: a tool to compare verification runs with and without "Isolate Assertions" mode.
+* `plot_distribution`: a tool to be run on the logs generated by `dafny measure-complexity`. It runs some tests on the verification results contained in the log, scores them heuristically for their potential for improvement, presents the results in summary tables, and plots the most interesting results for further analysis.
+* `compare_distribution`: a tool to compare verification runs at different Assertion Batch granularity, i.e. with and without "Isolate Assertions" mode.
 
 ## Installation
 
@@ -169,6 +169,8 @@ Standard mode distribution plots contain a table analyzing the logs. For conveni
 * ⌛️ : This element finished as Out of Resources.
 * ❌ : This element explicitly failed verification.
 * ❗️ : This element had *both* successful and failed/OoR results. Note that purely successful results are not highlighted because they're the hoped default; but fliflopping results merit extra attention. According to the Dafny team (link XXX), as long as there is a successful result, the goal should be to stabilize it to remove the failures – as opposed to discarding the success because of the failures.
+* ❓ : This element had a single success across all iterations. It's probably prioritary to stabilize its success.
+* ⛔️ : This element was excluded from the plot on request.
 
 IA mode distribution plots contain 2 tables. The first one is equivalent to the one just described, only applied to the individual ABs. The second table shows the summary data at the member level, still in IA mode.
 

@@ -77,7 +77,7 @@ def main() -> int:
     #parser.add_argument("-o", "--only", action='append', default=[], help="Only plot DisplayNames with these substrings")
     parser.add_argument("-t", "--top", type=int, default=5, help="Plot only the top N most interesting. Default: %(default)s")
     parser.add_argument("-s", "--stop", default=False, action='store_true', help="Process the data but stop before plotting.")
-    parser.add_argument("-a", "--force-IAmode", default=False, action='store_true', help="Whether to focus on Assertion Batches instead of functions/methods/etc. Best for Isolated Assertions mode. Default: autodetect")
+    parser.add_argument("-a", "--force-IAmode", default=False, action='store_true', help="Whether to focus on Assertion Batches instead of members. Best for Isolated Assertions mode. Default: autodetect")
     parser.add_argument("-l", "--limitRC", type=Quantity, default=None, help="The RC limit that was used during verification. Used only to check consistency of results. Default: %(default)s")
     parser.add_argument("-b", "--bspan", type=int, default=0, help="A function's histogram will only be plotted if it spans => BSPAN bins. Default: %(default)s")
 
@@ -88,9 +88,9 @@ def main() -> int:
 
     if not args.paths:
         # Get the path of the latest file in the current directory
-        latest_file = max(glob.glob("*"), key=os.path.getmtime)
+        latest_file = max(glob.glob("darum/*"), key=os.path.getmtime)
         if latest_file.endswith(".json"):
-            log.info("Plotting latest file in current dir: {os.path.basename(latest_file)}")
+            print(f"Plotting latest file in darum/: {os.path.basename(latest_file)}")
             args.paths.append(latest_file)
         else:
             sys.exit("Error: No file given, and latest file in dir is not JSON.")
@@ -107,7 +107,7 @@ def main() -> int:
     minOoR = inf # min RC of the OoR entries
     minFailures = inf # min RC of the failed entries
     maxFailures = -inf # max RC of the failed entries
-    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","AB","loc","diag","displayName", "desc"])
+    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","fail_extr","AB","loc","diag","displayName", "desc", "src"])
     df.index.name="element"
 
     IAmode = None
@@ -163,13 +163,14 @@ def main() -> int:
             # any RC > limitRC should be in the OoRs, not in the RCs
             # but beware, in IAmode, the vRs' RC is the sum of its ABs, so they can legitimately have RCs > limitRC
             if maxRC_entry > args.limitRC:
-                sys.exit(f"LimitRC={args.limitRC} but {k}({v.AB=}) has maxRC={Quantity(maxRC_entry)}. Should be OoR! ")
+                log.warning(f"LimitRC={args.limitRC} but {k}({v.AB=}) has maxRC={Quantity(maxRC_entry)}. Should be OoR! ")
             if minOoR_entry < args.limitRC:
-                log.warning(f"MinOoR for {k} is {min(v.OoR)}, should be > {args.limitRC=}")
+                log.warning(f"MinOoR for {k} is {min(v.OoR)}, should be > LimitRC={args.limitRC}")
         # Calculate the % span between max and min
         span = (maxRC_entry-minRC_entry)/minRC_entry
         # info = f"{k:40} {len(v.RC):>10} {smag(minRC_entry):>8}    {smag(maxRC_entry):>6} {span:>8.2%}"
         # log.debug(info)
+        fail_extremes = "" if minFailures_entry == inf else f"{smag(minFailures_entry)} - {smag(maxFailures_entry)}"
         df.loc[k] = {
             "success": len(v.RC),
             "minRC" : minRC_entry,
@@ -181,9 +182,12 @@ def main() -> int:
             "loc"   : v.loc if filenames_only_one else f"{v.filename}:{v.loc}",
             "diag": diag,
             "displayName": v.displayName,
-            "desc":v.description
+            "desc": v.description,
+            "fail_extr": fail_extremes
         }
 
+    if minFailures == inf:
+        df.drop(columns=["fail_extr"], inplace=True)
     minFailures = Quantity(minFailures)
     minOoR = Quantity(minOoR)
     # assert maxRC < minFail
@@ -213,29 +217,41 @@ def main() -> int:
     # An AB that flipflops needs highlighting
     df.loc[((df.fail>0) | (df.OoR>0)) & (df.success>0),"diag"] += "❗️"
 
+    items_only_OoR = (df.OoR>0) & (df.success==0) & (df.fail==0)
+    if  items_only_OoR.any() :
+        line = f"Some items only had OoR results. Consider verifying again with a higher RC limit."
+        log.info(line)
+        comment_box += f"* {line}\n"
 
+    # Sorting the items by interestingness is done through a score.
+    # A good starting point:
+    df["score"] = df.span * df.minRC
+    # but there's a lot of corner cases to consider.
 
+    # Items without span or minimum would have NaNs
+    df.loc[np.isnan(df.score),"score"] = 0
 
-    # Scoring: span * minRC is a good starting point
-    # but ABs usually have smaller spans and smaller RCs than full functions, while big numbers are even more suspicious, so boost it
+    # ABs usually have smaller spans and smaller RCs than whole members, so boost them
+    AB_boost_factor = 5
+    df.loc[df["AB"]>0,"score"] *= AB_boost_factor
 
-    # we need a big number around the max plotted
+    # Big RCs in ABs are even more suspicious than in whole members, so boost them
+    # we need a big number. We want it around the max plotted to keep some measure of proportion.
     bigRC = minOoR
     if bigRC == inf: # there were no OoRs!
         bigRC = maxRC
     if bigRC == -inf: # there were no successes??
         bigRC == maxFailures
-    AB_boost_factor = 5
-    df["score"] = df.span * df.minRC
-    df.loc[np.isnan(df.score),"score"] = 0
-    # ABs with only 1 success have span 0. Let's help them a bit, but tag them
-    df.loc[df.success==1,"score"] = 0.01 * df.minRC
-    df.loc[(df.success==1),"diag"] += "❓"
-    df.loc[df["AB"]>0,"score"] *= AB_boost_factor
+
+    # items with only 1 success have span 0, yet a single success between many failures needs highlighting. Boost the score, but tag them
+    only1success = (df.success==1) & ((df.fail+df.OoR)>1)
+    df.loc[only1success,"score"] = bigRC
+    df.loc[only1success,"diag"] += "❓"
+
     df.loc[df["OoR"]>0,"score"] += bigRC
     df.loc[df["fail"]>0,"score"] += bigRC * 2
-    df.sort_values(["score"], ascending=False, kind='stable', inplace=True)
 
+    df.sort_values(["score"], ascending=False, kind='stable', inplace=True)
 
 
     # In IA mode, the focus in on the ABs. Separate them.
@@ -269,7 +285,7 @@ def main() -> int:
             if mRC != inf:
                 line = f"Logs contain OoR results, but no limitRC was given. Minimum OoR RC found = {minOoR}."
                 log.info(line)
-                # comment_box += f"* {line}\n"
+                comment_box += f"* {line}\n"
                 OoRstr = f"OoR > {minOoR}"
                 if minOoR < maxRC_ABs:
                     line=f"LimitRC must have been <= {minOoR}, yet some results are higher: {maxRC_ABs=}"
@@ -284,19 +300,20 @@ def main() -> int:
         else:
             OoRstr = ""
     else:
+        comment_box += f"* LimitRC = {args.limitRC}\n"
         # we did some checking at the single-result-level while digesting the logs; here we can do global checks
         if args.limitRC < maxRC_ABs:
-            line = f"{args.limitRC=}, yet some results are higher: {maxRC_ABs}"
+            line = f"LimitRC={args.limitRC}, yet some results are higher: {maxRC_ABs}"
             log.warn(line)
             comment_box += f"* {line}\n"
         if  maxFailures > args.limitRC:
-            line = f"{maxFailures=} is greater than {args.limitRC=}"
+            line = f"LimitRC={args.limitRC}, yet {maxFailures=} is higher"
             log.info(line)
             comment_box += f"* {line}\n"
-        assert args.limitRC < minOoR, f"{args.limitRC=}, yet some OoR results are lower: {minOoR=}"
+        assert args.limitRC < minOoR, f"LimitRC={args.limitRC}, yet some OoR results are lower: {minOoR=}"
         if minOoR < inf and  minOoR > args.limitRC * 1.1:
             # There are OoRs, but they are suspiciously higher than the given limit.
-            line = (f"The given {args.limitRC=} is quite smaller than the min OoR found = {minOoR}. Might be incorrect.")
+            line = (f"The given LimitRC={args.limitRC} is quite smaller than the min OoR found = {minOoR}. Might be incorrect.")
             log.warn(line)
             comment_box += f"* {line}\n"            
         OoRstr = f"OoR > {args.limitRC}"
@@ -396,6 +413,8 @@ def main() -> int:
     can_plot = not np.isnan(bin_width)
     if not can_plot:
         comment_box += f"* No plots were generated because the top {args.top} were all failed / OoR.\n"
+
+    print(f"Comments:\n{comment_box}")
 
     if args.stop:
         log.info("Stopping as requested.")
@@ -557,6 +576,7 @@ def main() -> int:
     # TABLE/S
 
     df["span"] = df["span"].apply(lambda d: nan if np.isnan(d) else int(d*10000)/100)
+    # We can't use magnitudes with the RCs because then the tables can't be sorted correctly.
     df.minRC = df.minRC.apply(lambda x: x if abs(x)<inf else "-")
     df.maxRC = df.maxRC.apply(lambda x: x if abs(x)<inf else "-")
     df.success = df.success.apply(lambda x: x if x!=0 else "-")
@@ -627,7 +647,7 @@ def main() -> int:
 ❌ Some iteration failed verification
 ⌛️ Some iteration failed with Out of Resources
 ❗️ Flipflopping result: some successes, some failures
-❓ Dubious score because there was only 1 success 
+❓ Notable entry because there was only 1 success
 📊 Item present in the plot
 ⛔️ Item excluded from plot
 """
@@ -636,7 +656,7 @@ def main() -> int:
     if comment_box!="":
         comment_box = "# Comments:\n" + comment_box
         pane_comment_box = pn.pane.Markdown(comment_box)
-        print(f"\n{comment_box}")
+        # print(f"\n{comment_box}")
     else:
         pane_comment_box = None
         

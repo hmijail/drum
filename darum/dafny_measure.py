@@ -6,9 +6,11 @@ by storing the log file with the args in the filename
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import select
+import shutil
 import subprocess as sp
 import sys
 import time
@@ -32,13 +34,13 @@ def main():
     parser.add_argument("-d", "--dafnyexec", default="dafny", help="The dafny executable")
     parser.add_argument("-r", "--rseed", default=str(int(time.time())),help="The random seed. By default is seeded with the current time.")
     parser.add_argument("-i", "--iter", default="10", help="Number of iterations. Default=%(default)s")
-    # parser.add_argument("-f", "--format", default="json", help=argparse.SUPPRESS) # CVS needs updating    
-    parser.add_argument("-f", "--filter-symbol", help="Only verify symbols containing this substring.") 
+    parser.add_argument("-f", "--format", default="json", help=argparse.SUPPRESS) # CVS needs updating
+    parser.add_argument("-s", "--filter-symbol", help="Only verify symbols containing this substring.")
     parser.add_argument("-l", "--limitRC", type=Quantity, default=Quantity("10M"), help="The Resource Count limit. Accepts magnitudes (K,M,G...). Default=%(default)s")
     parser.add_argument("-a", "--isolate-assertions",action="store_true", help="Isolate assertions")
     parser.add_argument("-c", "--verify-included-files",action="store_true", help="Verify included files")
     parser.add_argument("-z", "--z3-path", help="Path to Z3")
-    parser.add_argument("-o", "--output_dir", default="", help="Directory to store the results. Defaults to current dir")
+    parser.add_argument("-o", "--output_dir", default="darum", help="Directory to store the results. Default=%(default)s")
     parser.add_argument("-v", "--verbose", action="count", default=0)
 
     args = parser.parse_args()
@@ -46,37 +48,55 @@ def main():
     numeric_level = log.WARNING - args.verbose * 10
     log.basicConfig(level=numeric_level,format='%(levelname)s:%(message)s')
 
-
-    IAstr = "IA" if args.isolate_assertions else ""
-    VIFstr = "VIF" if args.verify_included_files else ""
-    if len(args.dafnyfiles) > 1:
-        log.warning("Hashing only the first file!")
-    with open(args.dafnyfiles[0], "rb") as f:
-        digest = hashlib.file_digest(f, "md5")
-    hash = digest.hexdigest()
-    dafnyfiles_str = "-".join([os.path.splitext(os.path.basename(f))[0] for f in args.dafnyfiles])+f"{hash[0:4]}"
-    z3str = f"Z{Path(args.z3_path).name}" if args.z3_path else ""
-    argstring4filename = f"{args.dafnyexec}_{dafnyfiles_str}_IT{args.iter}_L{args.limitRC}_{IAstr}_{VIFstr}_{z3str}_{args.extra_args}".replace("/","").replace("-","").replace(":","").replace(" ","")
+    try:
+        os.makedirs(args.output_dir)
+    except:
+        pass
+    IAstr = "_IA" if args.isolate_assertions else ""
+    VIFstr = "_VIF" if args.verify_included_files else ""
+    dafnyfiles_str = ""
+    source_dict  = {}
+    for df in args.dafnyfiles:
+        dfb = os.path.basename(df)
+        # with open(df, "rb") as f:
+        #     digest = hashlib.file_digest(f, "md5")
+        with open(df, "r") as f:
+            src= f.read()
+        digest = hashlib.md5(bytes(src, encoding="utf-8"))
+        hash = digest.hexdigest()
+        dfsplit = os.path.splitext(dfb)
+        source_dict[f"{dfsplit[0]}.{hash[0:4]}{dfsplit[1]}"]=src
+        dafnyfiles_str += f"_{dfsplit[0]}_{hash[0:4]}"
+        # take a snapshot of this input file, adding the same hash piece as in the log
+        dfcopy = os.path.join(args.output_dir,dfsplit[0]+"."+hash[0:4]+dfsplit[1])
+        if not os.path.exists(dfcopy):
+            shutil.copy2(df,dfcopy)
+    z3str = f"_Z{Path(args.z3_path).name}" if args.z3_path else ""
+    symbol = f"_s{args.filter_symbol}" if args.filter_symbol else ""
+    dafnyexec= os.path.basename(args.dafnyexec)
+    argstring4filename = f"{dafnyexec}{dafnyfiles_str}_IT{args.iter}_L{args.limitRC}{IAstr}{VIFstr}{z3str}{symbol}_{args.extra_args}".replace("/","").replace("-","").replace(":","").replace(" ","")
     d = dt.now()
-    dstr = d.strftime('%Y%m%d-%H%M%S')
-    filename = os.path.join(args.output_dir, dstr + "_" + argstring4filename)
+    dstr = d.strftime('%m%d-%H%M%S')
+    logfilename = os.path.join(args.output_dir, dstr + "_" + argstring4filename)
+    # for convenience, take another snapshot of a single-input-file with the same full filename as the log
+    if len(args.dafnyfiles)==1:
+        df= args.dafnyfiles[0]
+        dfsplit = os.path.splitext(df)
+        shutil.copy2(df,logfilename+dfsplit[1])
     #log.debug(f"filename={filename}")
     #shell_line = fr"{args.dafnyexec} measure-complexity --log-format csv\;LogFileName='{filename}' {args.extra_args} {args.dafnyfile}"
 
     arglist = [
         args.dafnyexec,
         "measure-complexity",
-        "--random-seed",
-        args.rseed,
-        "--iterations",
-        args.iter,
-        "--log-format",
-        f"{args.format};LogFileName={filename}.{args.format}",
-        "--resource-limit",
-        str(int(args.limitRC)),
+        "--random-seed", args.rseed,
+        "--iterations", args.iter,
+        "--log-format", f"{args.format};LogFileName={logfilename}.{args.format}",
+        "--resource-limit", str(int(args.limitRC)),
         "--isolate-assertions" if args.isolate_assertions else "",
         "--verify-included-files" if args.verify_included_files else "",
         *(["--solver-path", args.z3_path] if args.z3_path else []),
+        *(["--filter-symbol", args.filter_symbol] if args.filter_symbol else []),
         *args.extra_args.split(),
         *args.dafnyfiles
         ]
@@ -86,6 +106,13 @@ def main():
     # os.execvp(args.dafnyexec, arglist )
 
     #pitfalls: bufsize; blocking,
+
+    import atexit
+    def killProc():
+        log.info("Killing the subprocess...")
+        p.kill()
+    atexit.register(killProc)
+
     p = sp.Popen(arglist, bufsize=-1, stdout=sp.PIPE, stderr=sp.PIPE, text=True, process_group=0)
     os.set_blocking(p.stdout.fileno(), False)
     os.set_blocking(p.stderr.fileno(), False)
@@ -121,16 +148,47 @@ def main():
             if p.stderr.closed:
                 log.warn("stderr closed")
 
+    atexit.unregister(killProc)
     return_code = p.poll()
-    print(f"Generated logfile {filename}.{args.format}")
+    if return_code in [0,3,4]:
+        print(f"Generated logfile {logfilename}.{args.format}")
+        with open(f"{logfilename}.{args.format}") as jsonfile:
+            try:
+                j = json.load(jsonfile)
+                verificationResults = j["verificationResults"]
+            except:
+                log.error("No verificationResults!")
+        d = {}
+        d['files']=source_dict
+        j["darum"]=d
+        with open(f"{logfilename}.{args.format}",mode='w') as jsonfile:
+            json.dump(j,jsonfile)
+
     log.debug(f"{pgid=}, {return_code=}")
 
-    leaked_procs = []
-    for proc in psutil.process_iter(['pid', 'name']):
-        proc_pgid = os.getpgid(proc.info['pid'])
-        if pgid == proc_pgid:
-            log.warn(f"Leaked process: {proc.info['name']} PID={proc.info['pid']}")
-            leaked_procs.append(proc.info['pid'])
 
-    #TODO wait until pid is dead / kill proc?
+    # Check for leaked Z3 processes
+    d = dt.now()
+    leaked_procs_old = []
+    leaked_procs_found = False
+    while True:
+        elapsed = int((dt.now()-d).total_seconds())
+        leaked_procs = []
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                proc_pgid = os.getpgid(proc.info['pid'])
+                if pgid == proc_pgid:
+                    leaked_procs.append(proc)
+            except:
+                pass
+        if leaked_procs == []:
+            break
+        leaked_procs_found = True
+        if leaked_procs != leaked_procs_old and elapsed>1:
+            for proc in leaked_procs:
+                log.warn(f"Leaked process: {proc.info['name']} PID={proc.info['pid']}")
+            leaked_procs_old = leaked_procs
+        time.sleep(1)
+    if leaked_procs_found and elapsed>1:
+        log.warn(f"Leaked processes finished after {elapsed} secs")
     return return_code

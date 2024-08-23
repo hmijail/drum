@@ -9,6 +9,11 @@ import pickle
 import sys
 from typing import Tuple
 
+from quantiphy import Quantity
+
+def smag(i) -> str:
+    return f"{Quantity(i):.3}"
+
 def shortenDisplayName(dn:str) -> str:
     new: str = dn.replace(" (well-formedness)","") # WF is almost everywhere, so omit it; better just mention anything non-WF
     new = new.replace(" (correctness)","[C]")
@@ -76,7 +81,7 @@ def readCSV(fullpath) -> resultsType:
     return rows
 
 
-def readJSON(fullpath: str, paranoid=True) -> resultsType:
+def readJSON(fullpath: str, paranoid=True) -> resultsType: #tuple[resultsType,dict[int,int]]:
     #reads 1 file (possibly containing multiple verification runs)
     results: resultsType = {}
 
@@ -90,11 +95,11 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
     if len(verificationResults) == 0:
         return results
     
-    # A JSON verification log contains a list of verificationResults (vR), from all the iterations.
-    # Verification iterations are only distinguishable because the randomseed changes.
-    # Each vR corresponds to a function, method...
+    # A JSON verification log contains a list of verificationResults (vR).
+    # Each vR corresponds to a member (function, method...)
     # and contains its Display Name, overall Resource Count, verification outcome and the vcResults (Assertion Batches)
-    #   Each AB contains its number (vcNum), outcome, Resource Count, and a list of assertions
+    #   Each AB contains its number (vcNum), outcome, Resource Count, random seed (strange that it's in the vcR instead of the vR), and a list of assertions
+    # Verification iterations can be distinguished because of the random seed.
     # If "isolate assertions", split_here, etc were NOT used, then the AB list in a vR will (usually?) contain only 1 AB
     # Conversely, if those are used, then the AB list in a vR will contain multiple ABs
     # So the 2 extremes are: 1 AB with all the assertions, or multiple ABs with 1 assertion each.
@@ -111,19 +116,23 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
 
     locations: dict[tuple,dict[int,dict[str,str]]] = {} # relate (file,line,col) to {randomseed:{displayname_AB:description}}; allows to compare results per file position
         # the idea is that a given location, across all randomseeds, should have the same ABs and same results/descriptions
-
+    iteration_costs: dict[int,int] = {}
     for vr in verificationResults:
         shortDN = shortenDisplayName(vr["name"])
         vr_RC = vr["resourceCount"]
 
-        # the rseed is only present in the vcrs, so get it from the first one
-        # we won't store it, it's only used for sanity checking and error reporting
+        # the rseed is only present in the vcrs, but seems to be constant at the vR level
+        # so get it from the first one
+        # we won't return it to the user, it's only used for sanity checking and error reporting
+
         try:
             vr_rseed = vr['vcResults'][0]['randomSeed']
         except:
             # logs made by `dafny verify` contain no randomSeed
-            vr_rseed = None
+            # vr_rseed = None
+            sys.exit(f"{shortDN} has no random seed. Maybe this log was created by `dafny verify` instead of `measure-complexity`?")
 
+        iteration_costs[vr_rseed] = iteration_costs.get(vr_rseed, 0) + vr_RC
         det = results.get(shortDN, Details())
         det.AB = 0
         det.displayName = shortDN # they only differ in ABs
@@ -161,7 +170,6 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
         
         skipping_reason = None
         for vcr in vcRs:
-            #TODO tag post-fails, post-OoRs
             #TODO are we diagnosing the case of failed AB vs successful top? Or, failed top vs successful AB?
             assert vr_rseed == vcr["randomSeed"], f"rseed mismatch: {vr_rseed} vs {vcr["randomSeed"]} in {shortDN}"
 
@@ -254,7 +262,11 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType:
     if paranoid:
         check_locations_ABs(locations)
 
-    return results
+    cost_max = smag(max(iteration_costs.values()))
+    cost_min = smag(min(iteration_costs.values()))
+    log.info(f"Iteration costs: {cost_min} to {cost_max}")
+
+    return results #,iteration_costs
 
 
 
