@@ -11,21 +11,19 @@ import os
 from pathlib import Path
 import select
 import shutil
-import subprocess as sp
+# import subprocess as sp
 import sys
 import time
-import logging as log
+import logging
 import enum
 from datetime import datetime as dt, timedelta as td
 import psutil
 from quantiphy import Quantity
 from typing import NoReturn
+from sh import Command
+from functools import partial
 
-def shell(str, **kwargs):
-    """Convenient way to run a CLI string and get its exit code, stdout, stderr.."""
-    r = sp.run(str, shell=True, capture_output=True, text=True, **kwargs)
-    #print(r)
-    return r
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run dafny's measure-complexity and store the verification args in the filename of the resulting log file for easier bookkeeping.")
@@ -45,8 +43,10 @@ def main():
 
     args = parser.parse_args()
 
-    numeric_level = log.WARNING - args.verbose * 10
-    log.basicConfig(level=numeric_level,format='%(levelname)s:%(message)s')
+    logging.basicConfig() #level=numeric_level,format='%(levelname)s:%(message)s')
+    logger = logging.getLogger(__name__)
+    numeric_level = logging.WARNING - args.verbose * 10
+    logger.setLevel(numeric_level)
 
     try:
         os.makedirs(args.output_dir)
@@ -87,7 +87,7 @@ def main():
     #shell_line = fr"{args.dafnyexec} measure-complexity --log-format csv\;LogFileName='{filename}' {args.extra_args} {args.dafnyfile}"
 
     arglist = [
-        args.dafnyexec,
+        # args.dafnyexec,
         "measure-complexity",
         "--random-seed", args.rseed,
         "--iterations", args.iter,
@@ -100,71 +100,91 @@ def main():
         *args.extra_args.split(),
         *args.dafnyfiles
         ]
-    log.debug(f"Executing:{args.dafnyexec} {' '.join(arglist)}")
-    sys.stdout.flush()
-    sys.stderr.flush()
+    logger.debug(f"Executing:{args.dafnyexec} {' '.join(arglist)}")
+    # sys.stdout.flush()
+    # sys.stderr.flush()
     # os.execvp(args.dafnyexec, arglist )
 
     #pitfalls: bufsize; blocking,
 
     import atexit
     def killProc():
-        log.info("Killing the subprocess...")
-        p.kill()
+        logger.debug("Killing the subprocess' group...")
+        dafny_proc.kill_group()
     atexit.register(killProc)
 
-    p = sp.Popen(arglist, bufsize=-1, stdout=sp.PIPE, stderr=sp.PIPE, text=True, process_group=0)
-    os.set_blocking(p.stdout.fileno(), False)
-    os.set_blocking(p.stderr.fileno(), False)
-    pgid = os.getpgid(p.pid)
+    def process_output(stream, store, line):
+        #read = p.stdout.readline()
+        l = len(line)
+        # if l>0:
+        prefix = f'{stream.name}({l}): ' if args.verbose>2 else ""
+        stream.write(prefix + line)
+        store.append(line)
+        # else:
+        #     log.warn("")
 
     stdout = []
-    stderr = []
-    reads: list[int] = [p.stdout.fileno(), p.stderr.fileno()]
-    while True:
-        ret = select.select(reads, [], [])[0]
+    # stderr = []
 
-        for fd in ret:
-            if fd == p.stdout.fileno():
-                read = p.stdout.readline()
-                l = len(read)
-                if l>0:
-                    prefix = f'stdout({l}): ' if args.verbose>2 else ""
-                    sys.stdout.write(prefix + read)
-                    stdout.append(read)
-            if fd == p.stderr.fileno():
-                read = p.stderr.readline()
-                l = len(read)
-                if l>0:
-                    prefix = f'stderr({l}): ' if args.verbose>2 else ""
-                    sys.stderr.write(prefix + read)
-                    stderr.append(read)
+    dafny = Command(args.dafnyexec)
 
-        if p.poll() != None:
-            break
-        else:
-            if p.stdout.closed:
-                log.warn("stdout closed")
-            if p.stderr.closed:
-                log.warn("stderr closed")
+    dafny_proc = dafny(arglist,_out=partial(process_output, sys.stdout, stdout), _bg=True, _err_to_out=True, _ok_code=[0,1,2,3,4],_return_cmd=True, _new_session=True)
+    # p = sp.Popen(arglist, bufsize=-1, stdout=sp.PIPE, stderr=sp.PIPE, text=True, process_group=0)
+    # os.set_blocking(p.stdout.fileno(), False)
+    # os.set_blocking(p.stderr.fileno(), False)
+    pgid = dafny_proc.pgid 
+    logger.debug(f"{pgid=}")
 
+    # reads: list[int] = [p.stdout.fileno(), p.stderr.fileno()]
+    # while True:
+    #     ret = select.select(reads, [], [])[0]
+
+    #     for fd in ret:
+    #         if fd == p.stdout.fileno():
+    #             read = p.stdout.readline()
+    #             l = len(read)
+    #             if l>0:
+    #                 prefix = f'stdout({l}): ' if args.verbose>2 else ""
+    #                 sys.stdout.write(prefix + read)
+    #                 stdout.append(read)
+    #         if fd == p.stderr.fileno():
+    #             read = p.stderr.readline()
+    #             l = len(read)
+    #             if l>0:
+    #                 prefix = f'stderr({l}): ' if args.verbose>2 else ""
+    #                 sys.stderr.write(prefix + read)
+    #                 stderr.append(read)
+
+    #     if p.poll() != None:
+    #         break
+    #     else:
+    #         if p.stdout.closed:
+    #             log.warn("stdout closed")
+    #         if p.stderr.closed:
+    #             log.warn("stderr closed")
+
+    dafny_proc.wait()
     atexit.unregister(killProc)
-    return_code = p.poll()
-    if return_code in [0,3,4]:
+
+    exit_code = dafny_proc.exit_code
+    # if a log file was created, add our own data to it
+    if exit_code in [0,3,4]:
         print(f"Generated logfile {logfilename}.{args.format}")
         with open(f"{logfilename}.{args.format}") as jsonfile:
             try:
                 j = json.load(jsonfile)
                 verificationResults = j["verificationResults"]
             except:
-                log.error("No verificationResults!")
+                logger.error("No verificationResults!")
         d = {}
         d['files']=source_dict
+        d['output']=stdout
+        d['call']=[args.dafnyexec] + arglist
         j["darum"]=d
         with open(f"{logfilename}.{args.format}",mode='w') as jsonfile:
             json.dump(j,jsonfile)
 
-    log.debug(f"{pgid=}, {return_code=}")
+    logger.debug(f"{pgid=}, {exit_code=}")
 
 
     # Check for leaked Z3 processes
@@ -186,9 +206,9 @@ def main():
         leaked_procs_found = True
         if leaked_procs != leaked_procs_old and elapsed>1:
             for proc in leaked_procs:
-                log.warn(f"Leaked process: {proc.info['name']} PID={proc.info['pid']}")
+                logger.warn(f"Leaked process: {proc.info['name']} PID={proc.info['pid']}")
             leaked_procs_old = leaked_procs
         time.sleep(1)
     if leaked_procs_found and elapsed>1:
-        log.warn(f"Leaked processes finished after {elapsed} secs")
-    return return_code
+        logger.warn(f"Leaked processes finished after {elapsed} secs")
+    return exit_code
