@@ -1,11 +1,13 @@
 #! python3
 
 import argparse
+import json
 import math
 import sys
+from unicodedata import numeric
 # from matplotlib import table
 from quantiphy import Quantity
-import logging as log
+import logging
 from math import inf, nan
 import os
 import numpy as np
@@ -24,6 +26,7 @@ import os
 import glob
 import panel as pn
 from bokeh.models.widgets.tables import NumberFormatter, BooleanFormatter
+from ansi2html import Ansi2HTMLConverter
 
 def smag(i) -> str:
     return f"{Quantity(i):.3}"
@@ -83,8 +86,10 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    numeric_level = log.WARNING - args.verbose * 10
-    log.basicConfig(level=numeric_level,format='%(levelname)s: %(message)s')
+    logging.basicConfig() #level=numeric_level,format='%(levelname)s:%(message)s')
+    log = logging.getLogger(__name__)
+    numeric_level = max(logging.DEBUG, logging.WARNING - args.verbose * 10)
+    log.setLevel(numeric_level)
 
     if not args.paths:
         # Get the path of the latest file in the current directory
@@ -660,14 +665,55 @@ def main() -> int:
     else:
         pane_comment_box = None
         
-    plot = pn.Column(hvplot, table_title, table, table_vrs_title, table_vrs, legend_pane, pane_comment_box)
+
+    pane_cmds = pn.Column()
+    conv = Ansi2HTMLConverter()
+    log.debug(f"adding CLI data")
+
+    for p in args.paths:
+        try:
+            with open(p) as jsonfile:
+                j = json.load(jsonfile)['darum']
+            pane_cmds.append(pn.pane.Markdown("**" + ' '.join(j['cmd']) + "**"))
+            log.debug(f"added cmd")
+            pane_cmds.append(pn.pane.HTML(conv.convert("".join(j['output']))))
+            log.debug(f"added output")
+            for name,source in j['files'].items():
+    #             source = """Here is an example:
+
+    #     :::python
+    #     print('hellow world')
+    #     """
+    #             source = """Here is an example of AppleScript:
+    # ``` { .lang linenos=true linenostart=42 hl_lines="43-44 50" title="An Example Code Block" }
+    #     :::python
+    #     print('hellow world')
+    # ```
+    # """
+                # The markdown rendereres are supposed to highlight source code. But I can't make them work even to just add line numbers.
+                # Pygments doesn't highlight Dafny, either.
+                numbered = ""
+                splitted = source.splitlines(True)
+                lines_max = len(splitted)
+                num_digits = int(math.log10(lines_max))
+                for i,l in enumerate(splitted):
+                    numbered += f"{i:{num_digits}}:{l}"
+
+                pane_cmds.append(pn.pane.Markdown(f"## {name}\n```  \n{numbered}\n```\n"))#, renderer="markdown",extensions=["fenced_code","codehilite"]))
+                # log.debug(f"added source")
+        except Exception as e:
+            log.info(f"Failed to get extra context data from {p}:{e}")
+            continue
+
+    title = "-".join([os.path.splitext(os.path.basename(p))[0] for p in args.paths])
+    pane_title = pn.pane.Markdown(f"# {title}")
+    plot = pn.Column(pane_title, hvplot, table_title, table, table_vrs_title, table_vrs, legend_pane, pane_comment_box, pane_cmds)
 
     # fig = hv.render(plot)
     # #hb = fig.traverse(specs=[hv.plotting.bokeh.Histogram])
 
     # fig.xaxis.bounds = (0,bin_fails)
 
-    title = "-".join([os.path.splitext(os.path.basename(p))[0] for p in args.paths])
     plotfilepath = title+".html"
 
     try:

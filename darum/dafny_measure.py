@@ -45,7 +45,7 @@ def main():
 
     logging.basicConfig() #level=numeric_level,format='%(levelname)s:%(message)s')
     logger = logging.getLogger(__name__)
-    numeric_level = logging.WARNING - args.verbose * 10
+    numeric_level = max(logging.DEBUG, logging.WARNING - args.verbose * 10)
     logger.setLevel(numeric_level)
 
     try:
@@ -179,7 +179,7 @@ def main():
         d = {}
         d['files']=source_dict
         d['output']=stdout
-        d['call']=[args.dafnyexec] + arglist
+        d['cmd']=[args.dafnyexec] + arglist
         j["darum"]=d
         with open(f"{logfilename}.{args.format}",mode='w') as jsonfile:
             json.dump(j,jsonfile)

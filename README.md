@@ -168,7 +168,7 @@ Standard mode distribution plots contain a table analyzing the logs. For conveni
 * 📊 : This element was plotted because was among the top scores.
 * ⌛️ : This element finished as Out of Resources.
 * ❌ : This element explicitly failed verification.
-* ❗️ : This element had *both* successful and failed/OoR results. Note that purely successful results are not highlighted because they're the hoped default; but fliflopping results merit extra attention. According to the Dafny team (link XXX), as long as there is a successful result, the goal should be to stabilize it to remove the failures – as opposed to discarding the success because of the failures.
+* ❗️ : This element had *both* successful and failed/OoR results. Note that purely successful results are not highlighted because they're the hoped default; but fliflopping results merit extra attention. [According to the Dafny developers](https://github.com/dafny-lang/dafny/issues/5615#issuecomment-2223290919), as long as there is a successful result, the goal should be to stabilize it to avoid the failures – as opposed to discarding the success because of the failures.
 * ❓ : This element had a single success across all iterations. It's probably prioritary to stabilize its success.
 * ⛔️ : This element was excluded from the plot on request.
 
