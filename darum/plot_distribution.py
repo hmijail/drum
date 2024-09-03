@@ -85,7 +85,9 @@ def main() -> int:
     parser.add_argument("-b", "--bspan", type=int, default=0, help="A function's histogram will only be plotted if it spans => BSPAN bins. Default: %(default)s")
 
     args = parser.parse_args()
+    return plot(args)
 
+def plot(args) -> int:
     logging.basicConfig() #level=numeric_level,format='%(levelname)s:%(message)s')
     log = logging.getLogger(__name__)
     numeric_level = max(logging.DEBUG, logging.WARNING - args.verbose * 10)
@@ -112,7 +114,7 @@ def main() -> int:
     minOoR = inf # min RC of the OoR entries
     minFailures = inf # min RC of the failed entries
     maxFailures = -inf # max RC of the failed entries
-    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","fail_extr","AB","loc","diag","displayName", "desc", "src"])
+    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","fail_extr","AB","loc","diag","displayName", "desc"])#, "src"])
     df.index.name="element"
 
     IAmode = None
@@ -217,7 +219,7 @@ def main() -> int:
     assert df.loc[df.maxAB==1].empty, f"Unexpected AB1s: {df.loc[df.maxAB==1]}"
 
     # Add the emojis
-    df.loc[(df.fail>0),"diag"] += "❌"
+    df.loc[(df.fail>0) & (df.success==0) ,"diag"] += "❌"
     df.loc[(df.OoR>0),"diag"] += "⌛️"
     # An AB that flipflops needs highlighting
     df.loc[((df.fail>0) | (df.OoR>0)) & (df.success>0),"diag"] += "❗️"
@@ -318,7 +320,7 @@ def main() -> int:
         assert args.limitRC < minOoR, f"LimitRC={args.limitRC}, yet some OoR results are lower: {minOoR=}"
         if minOoR < inf and  minOoR > args.limitRC * 1.1:
             # There are OoRs, but they are suspiciously higher than the given limit.
-            line = (f"The given LimitRC={args.limitRC} is quite smaller than the min OoR found = {minOoR}. Might be incorrect.")
+            line = (f"{args.limitRC=} is quite smaller than the min OoR found = {minOoR}.")
             log.warn(line)
             comment_box += f"* {line}\n"            
         OoRstr = f"OoR > {args.limitRC}"
@@ -415,9 +417,9 @@ def main() -> int:
                 )
             )
 
-    can_plot = not np.isnan(bin_width)
+    can_plot = not np.isnan(bin_width) and bin_width >0
     if not can_plot:
-        comment_box += f"* No plots were generated because the top {args.top} were all failed / OoR.\n"
+        comment_box += f"* The top {args.top} results were not plottable. Only tables were generated.\n"
 
     print(f"Comments:\n{comment_box}")
 
@@ -648,8 +650,12 @@ def main() -> int:
 
 
     legend_icons = """
+## Legend
+### Elements
+...[C] - Correctness (elements without this stand for Well-Formedness)
+... B2 - Assertion Batch 2
 ### Diagnostic icons
-❌ Some iteration failed verification
+❌ All iterations failed verification
 ⌛️ Some iteration failed with Out of Resources
 ❗️ Flipflopping result: some successes, some failures
 ❓ Notable entry because there was only 1 success
@@ -668,16 +674,12 @@ def main() -> int:
 
     pane_cmds = pn.Column()
     conv = Ansi2HTMLConverter()
-    log.debug(f"adding CLI data")
-
     for p in args.paths:
         try:
             with open(p) as jsonfile:
                 j = json.load(jsonfile)['darum']
             pane_cmds.append(pn.pane.Markdown("**" + ' '.join(j['cmd']) + "**"))
-            log.debug(f"added cmd")
-            pane_cmds.append(pn.pane.HTML(conv.convert("".join(j['output']))))
-            log.debug(f"added output")
+            pane_cmds.append(pn.pane.HTML(conv.convert("".join(j['output'])),styles={'background-color': '#CCC'}))
             for name,source in j['files'].items():
     #             source = """Here is an example:
 
@@ -691,7 +693,8 @@ def main() -> int:
     # ```
     # """
                 # The markdown rendereres are supposed to highlight source code. But I can't make them work even to just add line numbers.
-                # Pygments doesn't highlight Dafny, either.
+                # Pygments doesn't highlight Dafny, anyway.
+                # So we add our own line numbers.
                 numbered = ""
                 splitted = source.splitlines(True)
                 lines_max = len(splitted)
