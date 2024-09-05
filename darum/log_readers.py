@@ -154,15 +154,15 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType: #tuple[resultsType,di
         for vcr in vcRs:
             try:
                 asst = vcr['assertions'][0]
-                filename = asst["filename"]
-                loc = f"{asst['line']}:{asst['col']}"
+                filename = asst["filename"] #just for convenience, even though vcRs never have any filename/location
+                #loc = f"{asst['line']}:{asst['col']}"
                 break
             except:
                 pass
         assert filename is not None
 
         det.filename = filename
-        det.loc = loc
+        #det.loc = loc
         results[shortDN] = det
 
         # We will check that the vr's RC equals the sum of the vcrs' RCs.

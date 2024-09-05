@@ -152,6 +152,12 @@ def plot(args) -> int:
 
     results = readLogs(args.paths, args.recreate_pickle)
 
+    assert len(args.paths) == 1, "Multi-file support is not complete"
+    p = args.paths[0]
+    with open(p) as jsonfile:
+        darum_context = json.load(jsonfile)['darum']
+    sourcecode = list(darum_context['files'].values())[0].splitlines()
+
     # PROCESS THE DATA
     comment_box = ""
     # Calculate the max-min span for each DisplayName, and the global maxRC, minRC, minFail
@@ -162,7 +168,7 @@ def plot(args) -> int:
     minOoR = inf # min RC of the OoR entries
     minFailures = inf # min RC of the failed entries
     maxFailures = -inf # max RC of the failed entries
-    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","fail_extr","AB","loc","loc_txt","diag","displayName", "desc"])#, "src"])
+    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","fail_extr","AB","loc","loc_txt","diag","displayName", "desc", "src"])
     df.index.name="element"
 
     IAmode = None
@@ -227,6 +233,7 @@ def plot(args) -> int:
         # log.debug(info)
         fail_extremes = "" if minFailures_entry == inf else f"{smag(minFailures_entry)} - {smag(maxFailures_entry)}"
         loc_txt =  v.loc if filenames_only_one else f"{v.filename}:{v.loc}"
+        src = ""
         loc = "" if filenames_only_one else f"{v.filename}:"
         loc_range = re.match(r'L(\d+)-(\d+)',v.loc)
         if loc_range:
@@ -234,8 +241,12 @@ def plot(args) -> int:
             loc += f'L<a href="#L{firstline}">{firstline}</a>-{loc_range.group(2)}'
         loc_LC = re.match(r'(\d+):(\d+)',v.loc)
         if loc_LC:
-            firstline = loc_LC.group(1)
-            loc += f'<a href="#L{firstline}">{firstline}</a>:{loc_LC.group(2)}'   
+            firstline = int(loc_LC.group(1))
+            col = int(loc_LC.group(2))
+            loc += f'<a href="#L{firstline}">{firstline}</a>:{col}'
+            src = sourcecode[firstline-1].strip()
+            src = src[:col] + '❌' + src[col:]
+
 
         df.loc[k] = {
             "success": len(v.RC),
@@ -250,7 +261,8 @@ def plot(args) -> int:
             "diag": diag,
             "displayName": v.displayName,
             "desc": v.description,
-            "fail_extr": fail_extremes
+            "fail_extr": fail_extremes,
+            "src": src
         }
 
     if minFailures == inf:
@@ -258,6 +270,10 @@ def plot(args) -> int:
     minFailures = Quantity(minFailures)
     minOoR = Quantity(minOoR)
     # assert maxRC < minFail
+
+    df_with_sources = df.loc[df.src!='']
+    if df_with_sources.empty:
+        df.drop(columns=["src"],inplace=True)
 
     # Make any per-DN adjustments
     ABs_present = False
@@ -458,9 +474,10 @@ def plot(args) -> int:
             break
 
     dropped_cols = ["element_ordered","AB","excluded","displayName","maxAB"]
+
     dropped_cols_text = dropped_cols.copy()
-    dropped_cols_text.append("loc")
-    print(df.drop(columns=dropped_cols_text)
+    dropped_cols_text += ["loc","src"]
+    print(df.drop(columns=dropped_cols_text, errors='ignore')
             # .rename(columns={
             #     "span"          : "RC span %",
             #     "weighted_span" : "minRC * span"
@@ -643,7 +660,7 @@ def plot(args) -> int:
         hvplot.cols(1)
 
     # TABLE/S
-
+    dropped_cols += ["loc_txt"]
     df["span"] = df["span"].apply(lambda d: nan if np.isnan(d) else int(d*10000)/100)
     # We can't use magnitudes with the RCs because then the tables can't be sorted correctly.
     df.minRC = df.minRC.apply(lambda x: x if abs(x)<inf else "-")
@@ -763,7 +780,7 @@ def plot(args) -> int:
                 lines_max = len(splitted)
                 num_digits = int(math.log10(lines_max))
                 for i,l in enumerate(splitted):
-                    numbered += f'<a id="L{i}">{i:{num_digits}}</a>: {l}<br />'
+                    numbered += f'<a id="L{i+1}">{i+1:{num_digits}}</a>: {l}<br />'
 
                 pane_cmds.append(pn.pane.HTML(f'<h3 id="title">title</h3><pre><code>{numbered}</code></pre>'))#, renderer="markdown",extensions=["fenced_code","codehilite"]))
                 # log.debug(f"added source")
