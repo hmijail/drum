@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import re
 import sys
 from unicodedata import numeric
 # from matplotlib import table
@@ -68,6 +69,53 @@ export class NumericalTickFormatterWithLimit extends NumeralTickFormatter {
 }
 """)
 
+customJS = r"""
+<script type="text/javascript">
+/**
+ * @description Locates the first matching elements on the page, even within shadow DOMs, using a complex n-depth selector.
+ * Author: Roland Ross L. Hadi
+ * GitHub: https://github.com/rolandhadi/shadow-dom-selector
+ */
+function xfind(e,t=document){const o=performQuery(e,!1,t);return console.log(`Found ${o?1:0} element(s)`),o}function xfindAll(e,t=document){const o=performQuery(e,!0,t);return console.log(`Found ${o.length} element(s)`),o}function performQuery(e,t,o){validateSelector(e);const n=e.split(">>>");let r=o;for(let e=0;e<n.length;e++){if(e===n.length-1&&t)return querySelectorAllXFind(n[e],r);if(r=querySelectorXFind(n[e],r),null===r)return console.error(`Selector ${n[e]} not found`),t?[]:null}return r}function querySelectorAllXFind(e,t=document){return queryInShadowDOM(e,!0,t)}function querySelectorXFind(e,t=document){return queryInShadowDOM(e,!1,t)}function queryInShadowDOM(e,t,o){let n=o.querySelector(e);if(document.head.createShadowRoot||document.head.attachShadow){if(!t&&n)return n;return splitByUnquotedCharacter(e,",").reduce(((e,n)=>{if(!t&&e)return e;const r=splitByUnquotedCharacter(n.trim().replace(/\s*([>+~])\s*/g,"$1")," ").filter(Boolean),l=r.length-1,u=gatherAllElementsXFind(r[l],o),s=matchElements(r,l,o);return t?e.concat(u.filter(s)):u.find(s)||null}),t?[]:null)}return t?o.querySelectorAll(e):n}function matchElements(e,t,o){return n=>{let r=t,l=n;for(;l;){const t=!!l.matches&&l.matches(e[r]);if(t&&0===r)return!0;t&&r--,l=getParentOrHost(l,o)}return!1}}function splitByUnquotedCharacter(e,t){return e.match(/\\?.|^$/g).reduce(((e,o)=>('"'!==o||e.singleQuote?"'"!==o||e.doubleQuote?e.doubleQuote||e.singleQuote||o!==t?e.strings[e.strings.length-1]+=o:e.strings.push(""):(e.singleQuote^=1,e.strings[e.strings.length-1]+=o):(e.doubleQuote^=1,e.strings[e.strings.length-1]+=o),e)),{strings:[""],doubleQuote:0,singleQuote:0}).strings}function getParentOrHost(e,t){const o=e.parentNode;return o&&o.host&&11===o.nodeType?o.host:o===t?null:o}function gatherAllElementsXFind(e=null,t){const o=[],n=e=>{for(const t of e)o.push(t),t.shadowRoot&&n(t.shadowRoot.querySelectorAll("*"))};return t.shadowRoot&&n(t.shadowRoot.querySelectorAll("*")),n(t.querySelectorAll("*")),e?o.filter((t=>t.matches(e))):o}function validateSelector(e){try{document.createElement("div").querySelector(e)}catch{throw new Error(`Invalid selector: ${e}`)}}function highlightElements(e){const t=e=>{const t=e.style.outline;e.style.outline="2px solid red",setTimeout((()=>{e.style.outline=t}),2e3)};Array.isArray(e)?e.forEach(t):e&&t(e)}function showWelcomeMessage(){console.log("%cWelcome to Shadow DOM Selector!","color: green; font-size: 16px;"),console.log("%cAuthor: Roland Ross L. Hadi","color: blue; font-size: 14px;"),console.log("%cGitHub: https://github.com/rolandhadi/shadow-dom-selector","color: blue; font-size: 14px;"),console.log("%cExample usage: xfind('downloads-item:nth-child(4) #remove');","color: orange; font-size: 14px;")}showWelcomeMessage();
+
+console.log("toplevel: readystate=" + document.readyState)
+
+function addClickInterceptor()  {
+    console.log("In ContentLoaded: readystate=" + document.readyState)
+    codeDOM = xfind('pre>code')
+    document.addEventListener("click", (e) => {
+            //const target = e.target;
+            console.log("my Handler")//+JSON.stringify(e))
+            //if (target.matches('a[href^="#"]')) {
+            //    e.preventDefault();
+            //    codeDOM.querySelector(target.getAttribute('href')).scrollIntoView({
+            //        behavior: 'smooth'
+            //    });
+            //}
+            setTimeout(scrollToAnchor, 200);
+        });
+}
+
+
+function scrollToAnchor(){
+    urlHash = window.top.location.hash.substring(1)
+    console.log('hash:'+urlHash)
+    if (urlHash){
+        const target = xfind('a[id="'+urlHash+'"]',codeDOM)
+        target.scrollIntoView()
+    };
+};
+
+if (document.readyState === "loading") {
+  // Loading hasn't finished yet
+  document.addEventListener("DOMContentLoaded", addClickInterceptor);
+} else {
+  // `DOMContentLoaded` has already fired
+  addClickInterceptor();
+}
+
+</script>
+"""
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -114,7 +162,7 @@ def plot(args) -> int:
     minOoR = inf # min RC of the OoR entries
     minFailures = inf # min RC of the failed entries
     maxFailures = -inf # max RC of the failed entries
-    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","fail_extr","AB","loc","diag","displayName", "desc"])#, "src"])
+    df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","fail_extr","AB","loc","loc_txt","diag","displayName", "desc"])#, "src"])
     df.index.name="element"
 
     IAmode = None
@@ -178,6 +226,17 @@ def plot(args) -> int:
         # info = f"{k:40} {len(v.RC):>10} {smag(minRC_entry):>8}    {smag(maxRC_entry):>6} {span:>8.2%}"
         # log.debug(info)
         fail_extremes = "" if minFailures_entry == inf else f"{smag(minFailures_entry)} - {smag(maxFailures_entry)}"
+        loc_txt =  v.loc if filenames_only_one else f"{v.filename}:{v.loc}"
+        loc = "" if filenames_only_one else f"{v.filename}:"
+        loc_range = re.match(r'L(\d+)-(\d+)',v.loc)
+        if loc_range:
+            firstline = loc_range.group(1)
+            loc += f'L<a href="#L{firstline}">{firstline}</a>-{loc_range.group(2)}'
+        loc_LC = re.match(r'(\d+):(\d+)',v.loc)
+        if loc_LC:
+            firstline = loc_LC.group(1)
+            loc += f'<a href="#L{firstline}">{firstline}</a>:{loc_LC.group(2)}'   
+
         df.loc[k] = {
             "success": len(v.RC),
             "minRC" : minRC_entry,
@@ -186,7 +245,8 @@ def plot(args) -> int:
             "OoR" : len(v.OoR),
             "fail" : len(v.failures),
             "AB" : v.AB,
-            "loc"   : v.loc if filenames_only_one else f"{v.filename}:{v.loc}",
+            "loc"   : loc,
+            "loc_txt" : loc_txt,
             "diag": diag,
             "displayName": v.displayName,
             "desc": v.description,
@@ -398,7 +458,9 @@ def plot(args) -> int:
             break
 
     dropped_cols = ["element_ordered","AB","excluded","displayName","maxAB"]
-    print(df.drop(columns=dropped_cols)
+    dropped_cols_text = dropped_cols.copy()
+    dropped_cols_text.append("loc")
+    print(df.drop(columns=dropped_cols_text)
             # .rename(columns={
             #     "span"          : "RC span %",
             #     "weighted_span" : "minRC * span"
@@ -605,6 +667,7 @@ def plot(args) -> int:
         'success': NumberFormatter(format='0,0', text_align = 'right'),
         'fail': NumberFormatter(format='0,0', text_align = 'right'),
         'OoR': NumberFormatter(format='0,0', text_align = 'right'),
+        'loc': {'type':'html'}
     }
 
     table = pn.widgets.Tabulator(dft1, 
@@ -696,13 +759,13 @@ def plot(args) -> int:
                 # Pygments doesn't highlight Dafny, anyway.
                 # So we add our own line numbers.
                 numbered = ""
-                splitted = source.splitlines(True)
+                splitted = source.splitlines(False)
                 lines_max = len(splitted)
                 num_digits = int(math.log10(lines_max))
                 for i,l in enumerate(splitted):
-                    numbered += f"{i:{num_digits}}:{l}"
+                    numbered += f'<a id="L{i}">{i:{num_digits}}</a>: {l}<br />'
 
-                pane_cmds.append(pn.pane.Markdown(f"## {name}\n```  \n{numbered}\n```\n"))#, renderer="markdown",extensions=["fenced_code","codehilite"]))
+                pane_cmds.append(pn.pane.HTML(f'<h3 id="title">title</h3><pre><code>{numbered}</code></pre>'))#, renderer="markdown",extensions=["fenced_code","codehilite"]))
                 # log.debug(f"added source")
         except Exception as e:
             log.info(f"Failed to get extra context data from {p}:{e}")
@@ -710,7 +773,8 @@ def plot(args) -> int:
 
     title = "-".join([os.path.splitext(os.path.basename(p))[0] for p in args.paths])
     pane_title = pn.pane.Markdown(f"# {title}")
-    plot = pn.Column(pane_title, hvplot, table_title, table, table_vrs_title, table_vrs, legend_pane, pane_comment_box, pane_cmds)
+    pane_customJS = pn.pane.HTML(customJS, visible=False)
+    plot = pn.Column(pane_title, hvplot, table_title, table, table_vrs_title, table_vrs, legend_pane, pane_comment_box, pane_cmds,pane_customJS)
 
     # fig = hv.render(plot)
     # #hb = fig.traverse(specs=[hv.plotting.bokeh.Histogram])
@@ -749,3 +813,4 @@ def plot(args) -> int:
 # for easier debugging
 if __name__ == "__main__":
     main()
+

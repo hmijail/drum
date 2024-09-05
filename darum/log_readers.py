@@ -153,13 +153,16 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType: #tuple[resultsType,di
         filename = None
         for vcr in vcRs:
             try:
-                filename = vcr['assertions'][0]["filename"]
+                asst = vcr['assertions'][0]
+                filename = asst["filename"]
+                loc = f"{asst['line']}:{asst['col']}"
                 break
             except:
                 pass
         assert filename is not None
 
         det.filename = filename
+        det.loc = loc
         results[shortDN] = det
 
         # We will check that the vr's RC equals the sum of the vcrs' RCs.
@@ -178,9 +181,10 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType: #tuple[resultsType,di
             display_name_AB: str =f"{shortDN} B{ABn:0{ABdigits}}"
 
             if skipping_reason is not None:
-                if skipping_reason=="Fail" and vcr["outcome"] != "Valid":
-                    # this situation should be equivalent to "assume False && assert X", so should never fail??
-                    log.warn(f"Skipping after an AB failed, yet {display_name_AB}=={vr["outcome"]}")
+                if skipping_reason=="Fail":
+                    # after an AB fails, the situation should be equivalent to "assume False && assert X", so it should always be "valid" - but useless!
+                    # if we do find an invalid, then... what's going on?
+                    assert vcr["outcome"] == "Valid", f"Skipping after an AB failed, yet {display_name_AB}=={vcr["outcome"]}"
                 continue
 
             det = results.get(display_name_AB)
@@ -194,7 +198,7 @@ def readJSON(fullpath: str, paranoid=True) -> resultsType: #tuple[resultsType,di
                 # e.g. every AB1 in IAmode
                 if det.loc == "":
                     det.filename = filename #assumed, but what else could it be?
-                    det.loc = '-'
+                    det.loc = '-' #adding these "phantom" ABs to the 1st location of the method is rather unfair, since any line would have that extra cost
                     det.description = '-'
                 else:
                     assert det.loc == '-'

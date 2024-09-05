@@ -5,20 +5,16 @@ by storing the log file with the args in the filename
 """
 
 import argparse
-from curses.panel import top_panel
 import hashlib
 import json
 import os
 from pathlib import Path
-import select
 import shutil
 # import subprocess as sp
 import sys
 import time
 import logging
-import enum
 from datetime import datetime as dt, timedelta as td
-from tracemalloc import stop
 import psutil
 from quantiphy import Quantity
 from typing import NoReturn
