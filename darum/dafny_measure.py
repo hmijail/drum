@@ -80,11 +80,11 @@ def main():
     d = dt.now()
     dstr = d.strftime('%m%d-%H%M%S')
     logfilename = os.path.join(args.output_dir, dstr + "_" + argstring4filename)
-    # for convenience, take another snapshot of a single-input-file with the same full filename as the log
-    if len(args.dafnyfiles)==1:
-        df= args.dafnyfiles[0]
-        dfsplit = os.path.splitext(df)
-        shutil.copy2(df,logfilename+dfsplit[1])
+    # for convenience, take another snapshot of each single-input-file with the same full filename as the log
+    # if len(args.dafnyfiles)==1:
+    #     df= args.dafnyfiles[0]
+    #     dfsplit = os.path.splitext(df)
+    #     shutil.copy2(df,logfilename+dfsplit[1])
     #log.debug(f"filename={filename}")
     #shell_line = fr"{args.dafnyexec} measure-complexity --log-format csv\;LogFileName='{filename}' {args.extra_args} {args.dafnyfile}"
 

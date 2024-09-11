@@ -71,6 +71,9 @@ export class NumericalTickFormatterWithLimit extends NumeralTickFormatter {
 
 customJS = r"""
 <script type="text/javascript">
+/* Plain navigation to anchors doesn't work because the anchors are in a Panel, and each Panel is a shadowDOM. So we need to do it programmatically. 
+Additionally, Panel doesn't give us references to the shadowDOMs, so to access their content the best option seems to be to search for known ids inside the shadowDOMs */
+
 /**
  * @description Locates the first matching elements on the page, even within shadow DOMs, using a complex n-depth selector.
  * Author: Roland Ross L. Hadi
@@ -86,12 +89,21 @@ function addClickInterceptor()  {
 
 function delayedAdder() {
     codeDOM = xfind('pre>code')
-    lines = codeDOM.querySelectorAll('a[id^="L"]')
-    tableDOMs = xfindAll('.tabulator-tableholder')
-    tableDOMs.forEach((d) => {
+    lines = Array.from(codeDOM.querySelectorAll('a[id^="L"]'))
+    //bleDOMs = xfindAll('.tabulator-tableholder')
+    //bleDOMs.forEach((d) => {
+    //  d.addEventListener("click", clickInterceptor)
+    //
+    //rkdownDOMs = xfindAll('.bk-panel-models-markup-HTML')
+    //rkdownDOMs.forEach((d) => {
+    //  d.addEventListener("click", clickInterceptor)
+    //
+
+    //stdoutDOM = xfindAll('.ansi2html-content')
+    anchorlinks = xfindAll('a[href^="#"]')
+    anchorlinks.forEach((d) => {
         d.addEventListener("click", clickInterceptor)
     })
-
 }
 
 function clearSourceBackground() {
@@ -102,28 +114,20 @@ function clearSourceBackground() {
 
 function clickInterceptor(e) {
     const target = e.target;
-    //console.log("my click handler:"+target)
-    //console.log("match? " + target.matches('a[href^="#"]'))
+    console.log("clickInterceptor:"+target)
     //debugger
     if (target.matches('a[href^="#"]')) {
         e.preventDefault();
         clearSourceBackground()
-        dest = codeDOM.querySelector(target.getAttribute('href'))
-        dest.scrollIntoView({
-            //behavior: 'smooth'
-        });
-        dest.style.backgroundColor = 'yellow'
+        destID = target.getAttribute('href').slice(1)
+        console.log("Navigating to anchor:" + destID)
+        dest = xfind('a[id^="' + destID + '"]')
+        dest.scrollIntoView() 
+        if (lines.includes(dest)) {
+            dest.style.backgroundColor = 'yellow'
+        }
     }
 }
-
-function scrollToAnchor(){
-    urlHash = window.top.location.hash.substring(1)
-    console.log('hash:'+urlHash)
-    if (urlHash){
-        const target = xfind('a[id="'+urlHash+'"]',codeDOM)
-        target.scrollIntoView()
-    };
-};
 
 if (document.readyState !== "complete") {
   // Loading hasn't finished yet
@@ -145,7 +149,7 @@ def main() -> int:
     parser.add_argument("-n", "--nbins", default=50)
     #parser.add_argument("-d", "--RCspan", type=int, default=10, help="The span maxRC-minRC (as a % of max) over which a plot is considered interesting")
     parser.add_argument("-x", "--exclude", action='append', default=[], help="DisplayNames matched by this regex will be excluded from plot")
-    #parser.add_argument("-o", "--only", action='append', default=[], help="Only plot DisplayNames with these substrings")
+    parser.add_argument("-o", "--output_dir", default="darum", help="Directory to store the results. Default=%(default)s")
     parser.add_argument("-t", "--top", type=int, default=5, help="Plot only the top N most interesting. Default: %(default)s")
     parser.add_argument("-s", "--stop", default=False, action='store_true', help="Process the data but stop before plotting.")
     parser.add_argument("-a", "--force-IAmode", default=False, action='store_true', help="Whether to focus on Assertion Batches instead of members. Best for Isolated Assertions mode. Default: autodetect")
@@ -319,6 +323,10 @@ def plot(args) -> int:
 
     # Add the emojis
     df.loc[(df.fail>0) & (df.success==0) ,"diag"] += "❌"
+    if not df.loc[(df.fail>0)].empty :
+        line = f"""Some items had verification failures, whose details aren't stored in the log. Please inspect the <a href="#stdout">stored Dafny stdout</a>."""
+        log.info(line)
+        comment_box += f"* {line}\n"    
     df.loc[(df.OoR>0),"diag"] += "⌛️"
     # An AB that flipflops needs highlighting
     df.loc[((df.fail>0) | (df.OoR>0)) & (df.success>0),"diag"] += "❗️"
@@ -378,7 +386,7 @@ def plot(args) -> int:
     # Add a new index that reifies the current order
     df.reset_index(inplace=True)
     df.rename_axis(index="idx",inplace=True)
-    # And make it available as an alternative name. Useful for the plot legend and axis
+    # And make it available as an alternative name. Useful for the element names in the plot legend and axis
     df['element_ordered'] = [f"{i} {s}" for i,s in zip(df.index,df["element"])]
 
     
@@ -718,6 +726,7 @@ def plot(args) -> int:
         selectable=False, 
         text_align={"diag":"center"},
         formatters=bokeh_formatters, 
+        configuration={"initialSort":[{"column":"score","dir":"asc"}]}, # not working anyway
         height=300) #give a glimpse of more rows
 
     table_title = None
@@ -745,13 +754,14 @@ def plot(args) -> int:
             selectable=False, 
             text_align={"diag":"center"},
             formatters=bokeh_formatters, 
+            configuration={"initialSort":[{"column":"score","dir":"desc"}]}, # not working anyway
             height=300) #give a glimpse of more rows
 
         table_title = pn.pane.Markdown("## AB-level data")
         table_vrs_title = pn.pane.Markdown("## Member-level summary")
 
 
-
+    # the legend and other explanations (score?) could be turned into table tooltips, hoped for Panel 1.5
     legend_icons = """
 ## Legend
 ### Elements
@@ -784,7 +794,8 @@ MemberName B2  = MemberName's Assertion Batch 2
             with open(p) as jsonfile:
                 j = json.load(jsonfile)['darum']
             pane_cmds.append(pn.pane.Markdown("**" + ' '.join(j['cmd']) + "**"))
-            pane_cmds.append(pn.pane.HTML(conv.convert("".join(j['output'])),styles={'background-color': '#CCC'}))
+            pane_cmds.append(pn.pane.HTML(f"""<a id="stdout"></a>""" + 
+                    conv.convert("".join(j['output'])),styles={'background-color': '#CCC'}))
             for name,source in j['files'].items():
     #             source = """Here is an example:
 
@@ -812,7 +823,6 @@ a[id^="L"] {
 }
 '''
                 pane_cmds.append(pn.pane.HTML(f'<h2 id="title">{name}</h2><pre><code>{numbered}</code></pre>', stylesheets=[stylesheet]))#, renderer="markdown",extensions=["fenced_code","codehilite"]))
-                # log.debug(f"added source")
         except Exception as e:
             log.info(f"Failed to get extra context data from {p}:{e}")
             continue
@@ -820,12 +830,12 @@ a[id^="L"] {
     title = "-".join([os.path.splitext(os.path.basename(p))[0] for p in args.paths])
     pane_title = pn.pane.Markdown(f"# {title}")
     pane_customJS = pn.pane.HTML(customJS, visible=False)
-    plot = pn.Column(pane_title, hvplot, table_title, table, table_vrs_title, table_vrs, legend_pane, pane_comment_box, pane_cmds,pane_customJS)
+    plot = pn.Column(pane_title, hvplot, table_title, table, table_vrs_title, table_vrs,   pane_comment_box, legend_pane, pane_cmds, pane_customJS)
 
 
     # fig.xaxis.bounds = (0,bin_fails)
 
-    plotfilepath = title+".html"
+    plotfilepath = os.path.join(args.output_dir, title+".html")
 
     try:
         os.remove(plotfilepath)
