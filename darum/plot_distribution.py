@@ -82,8 +82,8 @@ Additionally, Panel doesn't give us references to the shadowDOMs, so to access t
 function xfind(e,t=document){const o=performQuery(e,!1,t);return console.log(`Found ${o?1:0} element(s)`),o}function xfindAll(e,t=document){const o=performQuery(e,!0,t);return console.log(`Found ${o.length} element(s)`),o}function performQuery(e,t,o){validateSelector(e);const n=e.split(">>>");let r=o;for(let e=0;e<n.length;e++){if(e===n.length-1&&t)return querySelectorAllXFind(n[e],r);if(r=querySelectorXFind(n[e],r),null===r)return console.error(`Selector ${n[e]} not found`),t?[]:null}return r}function querySelectorAllXFind(e,t=document){return queryInShadowDOM(e,!0,t)}function querySelectorXFind(e,t=document){return queryInShadowDOM(e,!1,t)}function queryInShadowDOM(e,t,o){let n=o.querySelector(e);if(document.head.createShadowRoot||document.head.attachShadow){if(!t&&n)return n;return splitByUnquotedCharacter(e,",").reduce(((e,n)=>{if(!t&&e)return e;const r=splitByUnquotedCharacter(n.trim().replace(/\s*([>+~])\s*/g,"$1")," ").filter(Boolean),l=r.length-1,u=gatherAllElementsXFind(r[l],o),s=matchElements(r,l,o);return t?e.concat(u.filter(s)):u.find(s)||null}),t?[]:null)}return t?o.querySelectorAll(e):n}function matchElements(e,t,o){return n=>{let r=t,l=n;for(;l;){const t=!!l.matches&&l.matches(e[r]);if(t&&0===r)return!0;t&&r--,l=getParentOrHost(l,o)}return!1}}function splitByUnquotedCharacter(e,t){return e.match(/\\?.|^$/g).reduce(((e,o)=>('"'!==o||e.singleQuote?"'"!==o||e.doubleQuote?e.doubleQuote||e.singleQuote||o!==t?e.strings[e.strings.length-1]+=o:e.strings.push(""):(e.singleQuote^=1,e.strings[e.strings.length-1]+=o):(e.doubleQuote^=1,e.strings[e.strings.length-1]+=o),e)),{strings:[""],doubleQuote:0,singleQuote:0}).strings}function getParentOrHost(e,t){const o=e.parentNode;return o&&o.host&&11===o.nodeType?o.host:o===t?null:o}function gatherAllElementsXFind(e=null,t){const o=[],n=e=>{for(const t of e)o.push(t),t.shadowRoot&&n(t.shadowRoot.querySelectorAll("*"))};return t.shadowRoot&&n(t.shadowRoot.querySelectorAll("*")),n(t.querySelectorAll("*")),e?o.filter((t=>t.matches(e))):o}function validateSelector(e){try{document.createElement("div").querySelector(e)}catch{throw new Error(`Invalid selector: ${e}`)}}function highlightElements(e){const t=e=>{const t=e.style.outline;e.style.outline="2px solid red",setTimeout((()=>{e.style.outline=t}),2e3)};Array.isArray(e)?e.forEach(t):e&&t(e)}function showWelcomeMessage(){console.log("%cWelcome to Shadow DOM Selector!","color: green; font-size: 16px;"),console.log("%cAuthor: Roland Ross L. Hadi","color: blue; font-size: 14px;"),console.log("%cGitHub: https://github.com/rolandhadi/shadow-dom-selector","color: blue; font-size: 14px;"),console.log("%cExample usage: xfind('downloads-item:nth-child(4) #remove');","color: orange; font-size: 14px;")}showWelcomeMessage();
 
 
-function addClickInterceptor()  {
-    console.log("In addClickInterceptor")
+function onLoadHandler()  {
+    console.log("In onLoadHandler")
     setTimeout(delayedAdder, 1000); // Bokeh's DocumentReady event is not working, either because we work at the Panel level or because it's a standalone doc
 }
 
@@ -104,9 +104,13 @@ function delayedAdder() {
     anchorlinks.forEach((d) => {
         d.addEventListener("click", clickInterceptor)
     })
+
+    window.addEventListener("popstate", PopStateHandler)
 }
 
 function clearSourceBackground() {
+
+    debugger
     lines.forEach((l) => {
         l.style.backgroundColor = 'transparent'
     })
@@ -115,27 +119,50 @@ function clearSourceBackground() {
 function clickInterceptor(e) {
     const target = e.target;
     console.log("clickInterceptor:"+target)
-    //debugger
+    debugger
     if (target.matches('a[href^="#"]')) {
         e.preventDefault();
-        clearSourceBackground()
+
+        stateData = {
+            scrollTop: document.documentElement.scrollTop
+        }
+        window.history.pushState(stateData,"title",window.location.href)
+
         destID = target.getAttribute('href').slice(1)
         console.log("Navigating to anchor:" + destID)
-        dest = xfind('a[id^="' + destID + '"]')
+        anchorSelector = 'a[id^="' + destID + '"]'
+        dest = xfind(anchorSelector)
         dest.scrollIntoView() 
-        if (lines.includes(dest)) {
-            dest.style.backgroundColor = 'yellow'
+        if (codeDOM.querySelectorAll(anchorSelector) !== null) {
+            highlighted = Array.from(codeDOM.querySelectorAll('.highlighted'))
+            highlighted.forEach( h => {
+                h.classList.remove("highlighted")
+            })
+            dest.classList.add("highlighted")
         }
+        console.log("clickInterceptor done")
     }
 }
 
+function PopStateHandler(e) {
+    debugger
+    var stateData = e.state;
+    console.log("recovering state:" + JSON.stringify(stateData))
+    document.documentElement.scrollTop = stateData.scrollTop
+}
+
+stateData = {
+    scrollTop: 0
+};
+history.replaceState(stateData, "", document.location.href);
+
 if (document.readyState !== "complete") {
   // Loading hasn't finished yet
-  console.log("Still not complete: prepared addClickInterceptor")
-  window.addEventListener("load", addClickInterceptor);
+  console.log("Still not complete: prepared onLoadHandler")
+  window.addEventListener("load", onLoadHandler);
 } else {
   // "load" has already fired
-  addClickInterceptor();
+  onLoadHandler();
 }
 
 </script>
@@ -820,6 +847,9 @@ MemberName B2  = MemberName's Assertion Batch 2
                 stylesheet = '''
 a[id^="L"] {
   scroll-margin-top: 50vh;
+}
+.highlighted {
+  background-color : yellow
 }
 '''
                 pane_cmds.append(pn.pane.HTML(f'<h2 id="title">{name}</h2><pre><code>{numbered}</code></pre>', stylesheets=[stylesheet]))#, renderer="markdown",extensions=["fenced_code","codehilite"]))

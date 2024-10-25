@@ -270,9 +270,9 @@ def main() -> None:
         opts.Spikes(spike_length=1,
                     #line_alpha=1,
                     responsive=True,
-                    height=50+nlabs*20,
+                    height=100+nlabs*20,
                     color=hv.Cycle(),
-                    ylim=(0,nlabs),
+                    ylim=(0,nlabs+1),
                     #autorange=None,
                     yaxis='right',
                     backend_opts={
@@ -285,9 +285,10 @@ def main() -> None:
         opts.NdOverlay(show_legend=False,
                         click_policy='mute',
                         autorange=None,
-                        ylim=(0,nlabs),
+                        ylim=(0,nlabs+1),
                         #xlim=(3000,RCfailure),
                         padding=(0.05),
+                        fontscale=1.5
                     ),
         #opts.NdOverlay(shared_axes=True, shared_datasource=True,show_legend=False)
         )
@@ -295,8 +296,9 @@ def main() -> None:
     scatter.opts(
         opts.Scatter(
                 responsive=True,
-                height=50+nlabs*20,
+                height=100+nlabs*20,
                 color=hv.Cycle(),
+                size=20,
                 #ylim=(0,nlabs),
                 #autorange=None,
                 yaxis='right',
@@ -389,7 +391,9 @@ def main() -> None:
             )
     )
 
-    plot = pn.Column(hvplot, table)
+    pane_title = pn.pane.Markdown(f"# {product}")
+    table_title = pn.pane.Markdown(f"## Comparison normal mode vs IA mode")
+    plot = pn.Column(pane_title, hvplot, table_title, table)
 
     # plot.opts(shared_axes=True)
 
