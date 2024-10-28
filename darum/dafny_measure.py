@@ -40,7 +40,7 @@ def main():
     parser.add_argument("-z", "--z3-path", help="Path to Z3")
     parser.add_argument("-o", "--output_dir", default="darum", help="Directory to store the results. Default=%(default)s")
     parser.add_argument("-v", "--verbose", action="count", default=0)
-    parser.add_argument("-n", "--no-plotting",action="store_true", help="Do not plot after the verification")
+    parser.add_argument("-n", "--no-plotting",action="store_true", help="Do not call plot_distribution after verification")
 
     args = parser.parse_args()
 
@@ -48,6 +48,9 @@ def main():
     logger = logging.getLogger(__name__)
     numeric_level = max(logging.DEBUG, logging.WARNING - args.verbose * 10)
     logger.setLevel(numeric_level)
+
+    if args.verify_included_files:
+        print("Using --verify-included-files. Beware, only the top file's source will be saved into the augmented log")
 
     try:
         os.makedirs(args.output_dir)
@@ -119,11 +122,12 @@ def main():
         # nonlocal iteration_tstamp
         nonlocal iteration_tstamp
         nonlocal iteration_times
+        nonlocal output_last_tstamp
+        now = dt.now()
         if "Starting verification of iteration" in line or "The total consumed resources are" in line:
-            now = dt.now()
             if iteration_tstamp is not None:
                 delta = int((now - iteration_tstamp).total_seconds())
-                l = f"Iteration took {delta} s."
+                l = f"DARUM:Iteration took {delta} s."
                 print(l)
                 store.append(l)
                 iteration_times.append(delta)
@@ -134,17 +138,18 @@ def main():
         stream.write(prefix + line)
         store.append(line)
         # else:
-        #     log.warn("")
+        #     log.warning("")
+        output_last_tstamp = now
 
-
-    stdout = []
+    stdout_store = []
     # stderr = []
 
     dafny = Command(args.dafnyexec)
 
     iteration_tstamp = None
     iteration_times = []
-    dafny_proc = dafny(arglist,_out=partial(process_output, sys.stdout, stdout), _bg=True, _err_to_out=True, _ok_code=[0,1,2,3,4],_return_cmd=True, _new_session=True)
+    output_last_tstamp = dt.now()
+    dafny_proc = dafny(arglist,_out=partial(process_output, sys.stdout, stdout_store), _bg=True, _err_to_out=True, _ok_code=[0,1,2,3,4],_return_cmd=True, _new_session=True)
     # p = sp.Popen(arglist, bufsize=-1, stdout=sp.PIPE, stderr=sp.PIPE, text=True, process_group=0)
     # os.set_blocking(p.stdout.fileno(), False)
     # os.set_blocking(p.stderr.fileno(), False)
@@ -164,6 +169,11 @@ def main():
         if procs != procs_old:
             logger.info(f"""Child procs: {[f"{proc.info['pid']}({proc.info['name']})" for proc in procs]}""" )
             procs_old = procs
+        delta = int((dt.now() - output_last_tstamp).total_seconds())
+        if delta > 1 and delta % 60 == 0 :
+            l = f"DARUM: no output for {delta/60} minutes..."
+            print(l)
+            stdout_store.append(l)
         time.sleep(1)
 
     dafny_proc.wait()
@@ -173,9 +183,9 @@ def main():
     logger.debug(f"{pgid=}, {exit_code=}")
 
     print()
-    line = f"{iteration_times=}"
+    line = f"DARUM:{iteration_times=}"
     print(line)
-    stdout.append(line)
+    stdout_store.append(line)
     # if a log file was created, add our own data to it
     if exit_code in [0,2,3,4]:
         with open(f"{logfilename}.{args.format}") as jsonfile:
@@ -186,12 +196,12 @@ def main():
                 logger.error("No verificationResults!")
         d = {}
         d['files']=source_dict
-        d['output']=stdout
+        d['output']=stdout_store
         d['cmd']=[args.dafnyexec] + arglist
         j["darum"]=d
         with open(f"{logfilename}.{args.format}",mode='w') as jsonfile:
             json.dump(j,jsonfile)
-        print(f"Generated augmented logfile at {logfilename}.{args.format}")
+        print(f"DARUM:Generated augmented logfile at {logfilename}.{args.format}")
 
     print("\n-----------------------------------------------------------------------------------\n")
 
@@ -214,11 +224,11 @@ def main():
         leaked_procs_found = True
         if leaked_procs != leaked_procs_old and elapsed>1:
             for proc in leaked_procs:
-                logger.warn(f"Leaked process: {proc.info['name']} PID={proc.info['pid']}")
+                logger.warning(f"Leaked process: {proc.info['name']} PID={proc.info['pid']}")
             leaked_procs_old = leaked_procs
         time.sleep(1)
     if leaked_procs_found and elapsed>1:
-        logger.warn(f"Leaked processes finished after {elapsed} secs")
+        logger.warning(f"Leaked processes finished after {elapsed} secs")
 
     if (args.no_plotting):# or (exit_code not in [0,1,2,3,4]):
         return exit_code
@@ -227,10 +237,10 @@ def main():
     pd_args = [
         f"{logfilename}.{args.format}",
         *([f"-{"v"*args.verbose}"] if args.verbose>0 else []),
-        *(["--force-IAmode"] if args.isolate_assertions else []),
+        *(["--force-IA-mode"] if args.isolate_assertions else []),
         *(["--limitRC", str(args.limitRC)] if args.limitRC is not None else []),
     ]
 
-    print(pd(pd_args,_err_to_out=True))
+    print(f"DARUM: running ",pd(pd_args,_err_to_out=True))
 
     return exit_code

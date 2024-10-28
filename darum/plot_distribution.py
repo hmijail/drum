@@ -84,20 +84,13 @@ function xfind(e,t=document){const o=performQuery(e,!1,t);return console.log(`Fo
 
 function onLoadHandler()  {
     console.log("In onLoadHandler")
-    setTimeout(delayedAdder, 1000); // Bokeh's DocumentReady event is not working, either because we work at the Panel level or because it's a standalone doc
+    //setTimeout(delayedAdder, 2000); // Bokeh's DocumentReady event is not working, maybe because we work at the Panel level or because it's a standalone doc
+    setInterval(delayedAdder, 1000) // so that links created by Tabulator when scrolling the tables are also processed
 }
 
 function delayedAdder() {
     codeDOM = xfind('pre>code')
     lines = Array.from(codeDOM.querySelectorAll('a[id^="L"]'))
-    //bleDOMs = xfindAll('.tabulator-tableholder')
-    //bleDOMs.forEach((d) => {
-    //  d.addEventListener("click", clickInterceptor)
-    //
-    //rkdownDOMs = xfindAll('.bk-panel-models-markup-HTML')
-    //rkdownDOMs.forEach((d) => {
-    //  d.addEventListener("click", clickInterceptor)
-    //
 
     //stdoutDOM = xfindAll('.ansi2html-content')
     anchorlinks = xfindAll('a[href^="#"]')
@@ -106,6 +99,7 @@ function delayedAdder() {
     })
 
     window.addEventListener("popstate", PopStateHandler)
+    console.log("delayAdder finished")
 }
 
 function clearSourceBackground() {
@@ -178,8 +172,9 @@ def main() -> int:
     parser.add_argument("-x", "--exclude", action='append', default=[], help="DisplayNames matched by this regex will be excluded from plot")
     parser.add_argument("-o", "--output_dir", default="darum", help="Directory to store the results. Default=%(default)s")
     parser.add_argument("-t", "--top", type=int, default=5, help="Plot only the top N most interesting. Default: %(default)s")
-    parser.add_argument("-s", "--stop", default=False, action='store_true', help="Process the data but stop before plotting.")
-    parser.add_argument("-a", "--force-IAmode", default=False, action='store_true', help="Whether to focus on Assertion Batches instead of members. Best for Isolated Assertions mode. Default: autodetect")
+    #parser.add_argument("-s", "--stop", default=False, action='store_true', help="Process the data but stop before plotting.")
+    parser.add_argument("-s", "--force-standard-mode", default=False, action='store_true', help="Treat Assertion Batches just like members. Default: autodetect")
+    parser.add_argument("-a", "--force-IA-mode", default=False, action='store_true', help="Whether to separate Assertion Batches and focus on them, instead of members. Best for Isolated Assertions mode. Default: autodetect")
     parser.add_argument("-l", "--limitRC", type=Quantity, default=None, help="The RC limit that was used during verification. Used only to check consistency of results. Default: %(default)s")
     parser.add_argument("-b", "--bspan", type=int, default=0, help="A function's histogram will only be plotted if it spans => BSPAN bins. Default: %(default)s")
 
@@ -207,7 +202,12 @@ def plot(args) -> int:
     p = args.paths[0]
     with open(p) as jsonfile:
         darum_context = json.load(jsonfile)['darum']
-    sourcecode = list(darum_context['files'].values())[0].splitlines()
+    fdict = darum_context['files']
+    sourcecode = {}# = list(darum_context['files'].values())[0].splitlines()
+    for f,c in darum_context['files'].items():
+        fname = f.split('.')[0] # remove the hash and ext
+        sourcecode[fname] = c.splitlines()
+        log.debug(f"Found source for '{fname}'")
 
     # PROCESS THE DATA
     comment_box = ""
@@ -222,23 +222,6 @@ def plot(args) -> int:
     df = pd.DataFrame( columns=["minRC", "maxRC", "span", "success", "OoR","fail","fail_extr","AB","loc","loc_txt","diag","displayName", "desc", "src"])
     df.index.name="element"
 
-    IAmode = None
-    IAmode_detected = True
-    for k,v in results.items():
-        if v.AB==1 and not v.loc=='-':
-            IAmode_detected = False
-            log.debug(f"IAmode=False because of {k}:{v.loc=}")
-            break
-
-    if  args.force_IAmode:
-        if not IAmode_detected:
-            log.info(f"Setting IAmode to {args.force_IAmode}, even though detected={IAmode_detected}")
-        IAmode = args.force_IAmode
-        # comment_box += f"* Isolate-assertions mode = forced on\n"
-    else:
-        IAmode= IAmode_detected
-        # if IAmode_detected:
-        #     comment_box += f"* Isolate-assertions mode = detected {IAmode_detected}\n"
 
     filenames : set[str]= set()
     for k,v in results.items():
@@ -284,22 +267,27 @@ def plot(args) -> int:
         # log.debug(info)
         fail_extremes = "" if minFailures_entry == inf else f"{smag(minFailures_entry)} - {smag(maxFailures_entry)}"
         loc_txt =  v.loc if filenames_only_one else f"{v.filename}:{v.loc}"
+        # if we have the source for the location, make the location text into an hyperlink, and show the line
+        fname = os.path.splitext(v.filename)[0]
         src = ""
-        loc = "" if filenames_only_one else f"{v.filename}:"
-        loc_range = re.match(r'L(\d+)-(\d+)',v.loc)
-        if loc_range:
-            firstline = loc_range.group(1)
-            loc += f'L<a href="#L{firstline}">{firstline}</a>-{loc_range.group(2)}'
-        loc_LC = re.match(r'(\d+):(\d+)',v.loc)
-        if loc_LC:
-            firstline = int(loc_LC.group(1))
-            col = int(loc_LC.group(2))
-            loc += f'<a href="#L{firstline}">{firstline}</a>:{col}'
-            srcline = sourcecode[firstline-1]
-            src = srcline.lstrip()
-            leading_whitespace = len(srcline)-len(src) # Dafny 4.8 prints error markers out of place because of tabs; some changes might come. https://github.com/dafny-lang/dafny/issues/5718 
-            adjusted_col = col-leading_whitespace
-            src = src[:adjusted_col] + '🛑' + src[adjusted_col:] 
+        if sourcecode.get(fname) is None:
+            loc = loc_txt
+        else:
+            loc = "" if filenames_only_one else f"{v.filename}:"
+            loc_range = re.match(r'L(\d+)-(\d+)',v.loc)
+            if loc_range:
+                firstline = loc_range.group(1)
+                loc += f'<b><a href="#L{firstline}">L{firstline}</a></b>-{loc_range.group(2)}'
+            loc_LC = re.match(r'(\d+):(\d+)',v.loc)
+            if loc_LC:
+                firstline = int(loc_LC.group(1))
+                col = int(loc_LC.group(2))
+                loc += f'<a href="#L{firstline}">{firstline}</a>:{col}'
+                srcline = sourcecode[fname][firstline-1]
+                src = srcline.lstrip()
+                leading_whitespace = len(srcline)-len(src) # This is correct if tab == 1 char. Dafny 4.8 does this, hence prints error markers out of place in stdout when there's tabs; some changes might come. https://github.com/dafny-lang/dafny/issues/5718
+                adjusted_col = col-leading_whitespace
+                src = src[:adjusted_col] + '🛑' + src[adjusted_col:] 
 
 
         df.loc[k] = {
@@ -330,20 +318,21 @@ def plot(args) -> int:
         df.drop(columns=["src"],inplace=True)
 
     # Make any per-DN adjustments
-    ABs_present = False
+    members_with_many_ABs = 0
     DNs = set(df["displayName"].values)
+    DNs_number = len(DNs)
     for d in DNs:
-        # if a DN only has AB0 and AB1, then drop AB1
+        # if a DN only has AB0 and AB1, then copy the location from AB1 to AB0 and drop AB1
         # because AB0 is summarized and easier to detect as non-AB in next steps
         dnABs = df[(df.displayName==d) & (df.AB>1)]
         if dnABs.empty:
             df.loc[(df.displayName==d) & (df.AB==0),"loc"] = df.loc[(df.displayName==d) & (df.AB==1),"loc"].values[0]
             df.drop(df[(df.displayName==d) & (df.AB==1)].index, inplace=True)
             df.loc[(df.displayName==d),"maxAB"] = 0
-            continue
         else:
             df.loc[(df.displayName==d),"maxAB"] = max(dnABs.AB)
-            ABs_present = True
+            members_with_many_ABs += 1
+
 
     # At this point, we should have no DNs with only AB1: either <1 or >1
     assert df.loc[df.maxAB==1].empty, f"Unexpected AB1s: {df.loc[df.maxAB==1]}"
@@ -395,6 +384,23 @@ def plot(args) -> int:
     df.sort_values(["score"], ascending=False, kind='stable', inplace=True)
 
 
+    IAmode_recommended = members_with_many_ABs > (DNs_number / 2)
+    if args.force_standard_mode:
+        if IAmode_recommended:
+            log.info(f"Setting IAmode OFF, even though most members have multiple ABs")
+            comment_box += f"* Isolate-assertions mode forced off\n"
+        IAmode = False
+    elif args.force_IA_mode:
+        if not IAmode_recommended:
+            log.info(f"Setting IAmode ON, even though most members have a single AB")
+            comment_box += f"* Isolate-assertions mode forced on\n"
+        IAmode = True
+    else:
+        IAmode= IAmode_recommended
+        if IAmode_recommended:
+            log.info(f"Setting IAmode ON because most members have multiple ABs")
+            comment_box += f"* Most members have multiple ABs, so Isolate-assertions mode was enabled\n"
+
     # In IA mode, the focus in on the ABs. Separate them.
     if IAmode:
         #put the desc column at the end
@@ -405,7 +411,7 @@ def plot(args) -> int:
 
         df_vrs = df[df["AB"] == 0]
         df = df[df["AB"]>0]
-        log.debug(f"vRs table:{df_vrs.shape}, ABs table:{df.shape}")
+        log.debug(f"shape of vRs table:{df_vrs.shape}, ABs table:{df.shape}")
     else:
         df_vrs = None
         df.drop(columns="desc",inplace=True)
@@ -560,9 +566,9 @@ def plot(args) -> int:
 
     print(f"Comments:\n{comment_box}")
 
-    if args.stop:
-        log.info("Stopping as requested.")
-        return(0)
+    # if args.stop:
+    #     log.info("Stopping as requested.")
+    #     return(0)
 
     # HOLOVIEWS
 
@@ -724,8 +730,8 @@ def plot(args) -> int:
     df.minRC = df.minRC.apply(lambda x: x if abs(x)<inf else "-")
     df.maxRC = df.maxRC.apply(lambda x: x if abs(x)<inf else "-")
     df.success = df.success.apply(lambda x: x if x!=0 else "-")
-    df.OoR = df.OoR.apply(lambda x: x if x!=0 else "-")
-    df.fail = df.fail.apply(lambda x: x if x!=0 else "-")
+    #df.OoR = df.OoR.apply(lambda x: x if x!=0 else "-")
+    #df.fail = df.fail.apply(lambda x: x if x!=0 else "-")
 
     dft1 = df.drop(columns=dropped_cols).rename(
         columns={
@@ -746,17 +752,20 @@ def plot(args) -> int:
     }
 
     table = pn.widgets.Tabulator(dft1, 
-        pagination=None,  
+        pagination=None,  # no explicit pages, just scrolling
         frozen_columns=['index'], 
         disabled=True, 
         layout='fit_data_table', 
         selectable=False, 
         text_align={"diag":"center"},
         formatters=bokeh_formatters, 
-        configuration={"initialSort":[{"column":"score","dir":"asc"}]}, # not working anyway
+        configuration={
+            "initialSort":[{"column":"score","dir":"asc"}], # not working anyway
+            #"renderVertical":"basic" # the whole table is rendered at once, instead of when scrolled in
+        }, 
         height=300) #give a glimpse of more rows
 
-    table_title = None
+    table_title = pn.pane.Markdown("## All elements")
     table_vrs = None
     table_vrs_title = None
     if df_vrs is not None:
@@ -766,8 +775,8 @@ def plot(args) -> int:
         df_vrs.minRC = df_vrs.minRC.apply(lambda x: x if abs(x)<inf else "-")
         df_vrs.maxRC = df_vrs.maxRC.apply(lambda x: x if abs(x)<inf else "-")
         df_vrs.success = df_vrs.success.apply(lambda x: x if x!=0 else "-")
-        df_vrs.OoR = df_vrs.OoR.apply(lambda x: x if x!=0 else "-")
-        df_vrs.fail = df_vrs.fail.apply(lambda x: x if x!=0 else "-")
+        #df_vrs.OoR = df_vrs.OoR.apply(lambda x: x if x!=0 else "-")
+        #df_vrs.fail = df_vrs.fail.apply(lambda x: x if x!=0 else "-")
         dft2 = df_vrs.drop(columns=dropped_cols, errors='ignore').rename(
                             columns={
                                 "span":"RCspan%",
@@ -781,7 +790,10 @@ def plot(args) -> int:
             selectable=False, 
             text_align={"diag":"center"},
             formatters=bokeh_formatters, 
-            configuration={"initialSort":[{"column":"score","dir":"desc"}]}, # not working anyway
+            configuration={
+                "initialSort":[{"column":"score","dir":"asc"}], # not working anyway
+                #"renderVertical":"basic" 
+            }, 
             height=300) #give a glimpse of more rows
 
         table_title = pn.pane.Markdown("## AB-level data")

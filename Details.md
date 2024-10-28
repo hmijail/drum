@@ -37,13 +37,13 @@ Consider the evolution of a piece of Dafny code and its verification cost:
 
 The result is that one starts editing member X of a Dafny file and suddenly verification fails or timeouts in a surprising, uncomprehensible way - because of the varying cost of member Y, which is untouched. Making some small change seems to restore the good behavior of X - but this is an illusion caused by the multimodality of the distributions. In fact, undoing the latest changes now seems to make the code verify after all! One shrugs the problem off and pushes forward... but 2 lines later again the failure appears.
 
-The situation is amusingly similar to that of Skinner's superstitious pigeon experiments: random actions seem to trigger unexplained positive outcomes, [causing the subject to develop superstition-like behaviors](https://www.youtube.com/watch?v=7XbH78wscGw) with the hope of triggering further positive outcomes.
+Unfortunately, the situation is amusingly similar to that of Skinner's superstitious pigeon experiments: random actions seem to trigger unexplained positive outcomes, [causing the subject to develop superstition-like behaviors](https://www.youtube.com/watch?v=7XbH78wscGw) with the hope of triggering further positive outcomes.
 
 ### Why would a cheap verification turn expensive?
 
 Dafny code needs to provide enough information for Z3 to find proofs. As the search space grows, Z3 will randomly [^3] take different paths (with different costs) to find a proof. If there's unneeded, "distracting" information, Z3 might even follow it into unproductive rabbitholes. This unneeded information comes from other DAs introduced by the context built up by the containing member. Hence **reducing the unneeded information introduced into an AB by previous DAs is key to stop Z3 from getting lost.**
 
-[^3]: This randomness is exhacerbated by Dafny, but still Z3 itself also works with an inherent degree of randomness. Hence Darum exploits this randomness instead of trying to control it.
+[^3]: This randomness is exhacerbated by Dafny, but still Z3 itself also works with an inherent degree of randomness. Hence, Darum exploits this randomness instead of trying to control it.
 
 Meanwhile, Dafny offers an "isolated assertions" (IA) verification mode, which breaks down a member's default single AB into many ABs, each containing a single, isolated DA. E.g., for member M containing DA1 and DA2:
 * Default verification would generate a single AB including both DA1 and DA2.
@@ -55,7 +55,7 @@ Hence, IA mode offers an easy way to partially isolate costs. Intriguingly, a ty
 
 Remember that, as code evolves, DAs change, creating different possible paths for the solver. An AB whose DAs support each other but don't unduly widen the horizon would then create a robust path, resilient to small changes. In contrast, a member whose DAs only tangentially build on each other and that widen the horizon unnecessarily will be vulnerable, or even prone, to brittleness.
 
-While the first impulse might be to limit the length of members, and this might help somewhat indirectly, note that the length is not the real problem; the key consideration is whether the DAs in the AB build on each other robustly.
+While the first impulse might be to limit the length of members, and this might help somewhat indirectly, note that the key consideration is whether the DAs in the AB build on each other robustly.
 
 [^2]: Either by physically defining new members, or using facilities [like `{:split_here}`](https://dafny.org/dafny/DafnyRef/DafnyRef.html#sec-split_here) or IA mode itself.
 [^4]: Dafny itself seems to be exploring this path towards using smaller ABs, and even IA mode, by default. (Dafny issue #[5819](https://github.com/dafny-lang/dafny/issues/5819))
@@ -63,8 +63,9 @@ While the first impulse might be to limit the length of members, and this might 
 ### So how does Darum help?
 
 Darum can be used to:
-1. Analyze verification cost and brittleness at various AB granularities, e.g.:
+1. Analyze verification cost and brittleness at any AB granularity, e.g.:
     * Default verification mode: discover the costs and their stability for default, member-level ABs.
-    * IA mode: discover what DAs are most likely to contribute to brittleness.
-2. Compare verification cost and brittleness at various AB granularities.
-    * Knowing how the distribution of verification costs varies across different AB granularities can point to stabilization opportunities, and even to what exact statements or expressions should be stabilized first.
+    * IA mode: discover what DAs are most likely to contribute to brittleness, and what "stabilization by pessimization" would look like.
+    * Anything in between: various Dafny functionalities allow to limit the size of batches (`split_here`, `isolate`, etc)
+2. Compare verification cost and brittleness across AB granularities.
+    * Knowing how the distribution of verification costs varies across different AB granularities can point to stabilization strategies.
