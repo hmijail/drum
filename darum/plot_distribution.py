@@ -198,16 +198,18 @@ def plot(args) -> int:
 
     results = readLogs(args.paths, args.recreate_pickle)
 
-    assert len(args.paths) == 1, "Multi-file support is not complete"
-    p = args.paths[0]
-    with open(p) as jsonfile:
-        darum_context = json.load(jsonfile)['darum']
+    sourcecode = {} 
+
+    darum_context = {}
+    for p in args.paths:
+        with open(p) as jsonfile:
+            dc = json.load(jsonfile)['darum']
+        for k in dc.keys():
+            darum_context[k] = darum_context.get(k, {}) | dc[k] # merge
+
     fdict = darum_context['files']
-    sourcecode = {}# = list(darum_context['files'].values())[0].splitlines()
-    for f,c in darum_context['files'].items():
-        fname = f.split('.')[0] # remove the hash and ext
-        sourcecode[fname] = c.splitlines()
-        log.debug(f"Found source for '{fname}'")
+    for f,c in fdict.items():
+        sourcecode[f] = c.splitlines()
 
     # PROCESS THE DATA
     comment_box = ""

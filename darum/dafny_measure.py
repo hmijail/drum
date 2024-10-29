@@ -9,19 +9,19 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pathlib
 import shutil
 # import subprocess as sp
 import sys
 import time
 import logging
-from datetime import datetime as dt, timedelta as td
+from datetime import datetime as dt, timedelta as td, timezone
 import psutil
 from quantiphy import Quantity
 from typing import NoReturn
 from sh import Command
 from functools import partial
 
-from darum import plot_distribution
 
 
 
@@ -59,29 +59,35 @@ def main():
     IAstr = "_IA" if args.isolate_assertions else ""
     VIFstr = "_VIF" if args.verify_included_files else ""
     dafnyfiles_str = ""
-    source_dict  = {}
+    source_dict  = {} # filename : filecontents
     for df in args.dafnyfiles:
-        dfb = os.path.basename(df)
+        dfbase = os.path.basename(df)
         # with open(df, "rb") as f:
         #     digest = hashlib.file_digest(f, "md5")
         with open(df, "r") as f:
             src= f.read()
+        mod_tstamp = os.stat(df).st_mtime
+        mod_date = dt.fromtimestamp(mod_tstamp, tz=timezone.utc)
         digest = hashlib.md5(bytes(src, encoding="utf-8"))
         hash = digest.hexdigest()
-        dfsplit = os.path.splitext(dfb)
-        filenamehash = f"{dfsplit[0]}.H{hash[0:4]}{dfsplit[1]}"
-        source_dict[filenamehash]=src
+        dfsplit = os.path.splitext(dfbase)
+        dfhash = f"{dfsplit[0]}.H{hash[0:4]}{dfsplit[1]}"
+        source_dict[dfbase] = {
+            "contents": src,
+            "hash": hash,
+            "modified": mod_date,
+        }
         dafnyfiles_str += f"_{dfsplit[0]}_H{hash[0:4]}"
         # take a snapshot of this input file, adding the same hash piece as in the log
-        dfcopy = os.path.join(args.output_dir,filenamehash)
+        dfcopy = os.path.join(args.output_dir,dfhash)
         if not os.path.exists(dfcopy):
             shutil.copy2(df,dfcopy)
     z3str = f"_Z{Path(args.z3_path).name}" if args.z3_path else ""
     symbol = f"_s{args.filter_symbol}" if args.filter_symbol else ""
     dafnyexec= os.path.basename(args.dafnyexec)
     argstring4filename = f"{dafnyexec}{dafnyfiles_str}_IT{args.iter}_L{args.limitRC}{IAstr}{VIFstr}{z3str}{symbol}_{args.extra_args}".replace("/","").replace("-","").replace(":","").replace(" ","")
-    d = dt.now()
-    dstr = d.strftime('%m%d-%H%M%S')
+    darum_context = dt.now()
+    dstr = darum_context.strftime('%m%d-%H%M%S')
     logfilename = os.path.join(args.output_dir, dstr + "_" + argstring4filename)
     # for convenience, take another snapshot of each single-input-file with the same full filename as the log
     # if len(args.dafnyfiles)==1:
@@ -186,31 +192,36 @@ def main():
     line = f"DARUM:{iteration_times=}"
     print(line)
     stdout_store.append(line)
+
     # if a log file was created, add our own data to it
     if exit_code in [0,2,3,4]:
         with open(f"{logfilename}.{args.format}") as jsonfile:
             try:
-                j = json.load(jsonfile)
-                verificationResults = j["verificationResults"]
+                json_data = json.load(jsonfile)
+                verificationResults = json_data["verificationResults"]
             except:
                 logger.error("No verificationResults!")
-        d = {}
-        d['files']=source_dict
-        d['output']=stdout_store
-        d['cmd']=[args.dafnyexec] + arglist
-        j["darum"]=d
+        darum_context = {}
+        darum_context['files']=source_dict
+        darum_context['output']=stdout_store
+        darum_context['dafny_cmd']=[args.dafnyexec] + arglist
+        darum_context['darum_args']={
+            "IAmode" : args.isolate_assertions,
+            "limitRC": args.limitRC
+        }
+        json_data["darum"]=darum_context
         with open(f"{logfilename}.{args.format}",mode='w') as jsonfile:
-            json.dump(j,jsonfile)
+            json.dump(json_data,jsonfile)
         print(f"DARUM:Generated augmented logfile at {logfilename}.{args.format}")
 
     print("\n-----------------------------------------------------------------------------------\n")
 
     # Check for leaked Z3 processes
-    d = dt.now()
+    t0 = dt.now()
     leaked_procs_old = []
     leaked_procs_found = False
     while True:
-        elapsed = int((dt.now()-d).total_seconds())
+        elapsed = int((dt.now()-t0).total_seconds())
         leaked_procs = []
         for proc in psutil.process_iter(['pid', 'name']):
             try:
